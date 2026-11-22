@@ -3,14 +3,14 @@
 # (examples/caller.yml), which runs the gate from the default branch.
 # `pull_request_target` runs the default branch's copy of this file, with the base repo's context.
 # The job must NEVER check out or run PR code, and must stay free of secrets and real steps
-# (`pull_request_review` still runs the PR's copy of this file).
+# (`pull_request_review` still runs the PR's copy of this file; CODEOWNERS on .github/workflows/ covers it).
 # The caller finds this workflow by its name, so do not rename it.
 name: pr-trigger
 
 on:
   # No `branches:` filter: the gate itself refuses a PR that does not target the default branch.
   # `edited` covers a base-branch change.
-  pull_request_target:
+  pull_request_target:  # zizmor: ignore[dangerous-triggers] - no checkout, no secrets; runs the default branch copy only
     types: [opened, synchronize, reopened, edited]
   pull_request_review:
     types: [submitted, dismissed]
