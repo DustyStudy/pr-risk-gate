@@ -16,6 +16,13 @@ on:
         description: ID of the GitHub App that posts the check (a variable, not a secret).
         type: string
         required: true
+    secrets:
+      app_private_key:
+        description: Private key of the GitHub App. The caller passes the `pr-risk-gate` environment secret PR_RISK_APP_KEY.
+        required: true
+      anthropic_api_key:
+        description: Anthropic API key (environment secret ANTHROPIC_API_KEY). Without it the PR is rated high.
+        required: false
 
 permissions: {}
 
@@ -109,7 +116,7 @@ jobs:
         uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           app-id: ${{ inputs.app_id }}
-          private-key: ${{ secrets.PR_RISK_APP_KEY }}
+          private-key: ${{ secrets.app_private_key }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-checks: write
@@ -155,7 +162,7 @@ jobs:
       - name: AI risk (API key only here, no token, no tools)
         if: steps.cache.outputs.hit != 'true'
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.anthropic_api_key }}
           DIFF_FILE: ${{ runner.temp }}/pr.diff
         run: |
           bash gate/scripts/ai_rate.sh > "$RUNNER_TEMP/ai.json"
