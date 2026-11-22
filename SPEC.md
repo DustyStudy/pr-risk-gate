@@ -104,11 +104,11 @@ Pure functions for tests: `max_rank`, `approvers_from_reviews`, `decide`, `build
 
 ### examples/caller.yml (in each target repo, default branch)
 
-`on: workflow_run`, `workflows: ["pr-trigger"]` (the name of the trigger workflow), `types: [completed]`. Calls `uses: DustyStudy/pr-risk-gate/.github/workflows/pr-gate.yml@<full-sha>` with `with: app_id: ${{ vars.PR_RISK_APP_ID }}` (a variable). It passes NO secrets: the keys are read from the `pr-risk-gate` environment inside the gate job. Top-level `permissions: {}`; job permissions `contents: read`.
+`on: workflow_run`, `workflows: ["pr-trigger"]` (the name of the trigger workflow), `types: [completed]`. Calls `uses: DustyStudy/pr-risk-gate/.github/workflows/pr-gate.yml@<full-sha>` with `with: app_id: ${{ vars.PR_RISK_APP_ID }}` (a variable). It passes both secrets by name (`PR_RISK_APP_KEY`, `ANTHROPIC_API_KEY`); their values come from the `pr-risk-gate` environment, which the gate job enters. No repository-level secret may exist with either name. Top-level `permissions: {}`; job permissions `contents: read`.
 
 ### .github/workflows/pr-gate.yml (reusable, workflow_call)
 
-Inputs: `app_id` (string, required). No `secrets:` block. Top-level `permissions: {}`. One job `gate`, `environment: pr-risk-gate`, ubuntu-latest, timeout 15 min, `concurrency` group `pr-risk-gate-<head sha>` with `cancel-in-progress: true`. The mint step reads `secrets.PR_RISK_APP_KEY` and the AI step reads `secrets.ANTHROPIC_API_KEY`, both from the environment, and no other step sees them. The gate passes `--base-ref "$DEFAULT_BRANCH"` to `gate.py run`.
+Inputs: `app_id` (string, required). Secrets: `PR_RISK_APP_KEY` (required), `ANTHROPIC_API_KEY` (optional), both declared under `workflow_call.secrets`. Top-level `permissions: {}`. One job `gate`, `environment: pr-risk-gate`, ubuntu-latest, timeout 15 min, `concurrency` group `pr-risk-gate-<head sha>` with `cancel-in-progress: true`. The mint step reads `secrets.PR_RISK_APP_KEY` and the AI step reads `secrets.ANTHROPIC_API_KEY`, both from the environment, and no other step sees them. The gate passes `--base-ref "$DEFAULT_BRANCH"` to `gate.py run`.
 
 Guard: stop with a failing check if `workflow_run.head_repository.full_name` differs from `repository`, or `workflow_run.pull_requests` is empty.
 
@@ -116,7 +116,7 @@ Steps:
 1. Harden runner (issue-factory's pin).
 2. Checkout this repo at `${{ job.workflow_sha }}` into `gate/`, persist-credentials false. Fail if the SHA is empty.
 3. Checkout the target at `${{ github.event.workflow_run.head_sha }}` with fetch-depth 0 into `target/`, persist-credentials false. Never run target code.
-4. Mint the App token with `actions/create-github-app-token` (pinned SHA from issue-factory or a verified release) using `app_id` and `app_private_key`, scoped to this repository, permissions `checks: write`, `pull-requests: read`, `contents: read`.
+4. Mint the App token with `actions/create-github-app-token` (pinned SHA from issue-factory or a verified release) using `app_id` and `PR_RISK_APP_KEY`, scoped to this repository, permissions `checks: write`, `pull-requests: read`, `contents: read`.
 5. Read PR number and base SHA from `workflow_run.pull_requests[0]`.
 6. Reuse the cached rating: `gate.py rating-cache get --app-id`. If none, run `risk.py` on `base...head` (from `target/`), then `ai_rate.sh` with the Anthropic key only in that step. Diff produced with `git -c core.quotePath=false -C target diff --no-ext-diff --no-textconv --text`. Install Claude Code via npm with `--ignore-scripts`, version 2.1.317, only when this step runs.
 7. Combine into `rating.json` with jq.

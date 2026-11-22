@@ -66,7 +66,7 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 1. **Create the GitHub App** in the organisation or account that owns the target repos. Permissions: Checks read and write, Pull requests read, Contents read, Metadata read. No webhook. Install it on the target repos only.
 2. **Create the environment** `pr-risk-gate` in each target repo. Under deployment branches, allow only the default branch.
 3. **Store the secrets in the environment**, not as repository secrets: `PR_RISK_APP_KEY` (the App's private key) and `ANTHROPIC_API_KEY`. Store the App ID as the repository variable `PR_RISK_APP_ID`. Remove any repository secrets with these names.
-   The gate job sets `environment: pr-risk-gate` and reads both secrets by these names. The caller job passes nothing; the reusable workflow declares `PR_RISK_APP_KEY` and `ANTHROPIC_API_KEY` under `workflow_call.secrets`, and the gate job's environment supplies their values (verified on a throwaway probe in the test repo).
+   The gate job sets `environment: pr-risk-gate` and reads both secrets by these names. The caller job passes both by name (`PR_RISK_APP_KEY: ${{ secrets.PR_RISK_APP_KEY }}`, `ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}`), and the gate job's environment supplies the values. No repository-level secret may exist with either name. Verified on the test repo: PR #36 rated low with an AI PASS and posted its check through the App.
 4. **Copy the workflows** to the target repo's default branch:
    - `examples/pr-trigger.yml` as `.github/workflows/pr-trigger.yml`.
    - `examples/caller.yml` as `.github/workflows/pr-risk-gate.yml`. Replace the placeholder SHA with the full commit SHA of the gate release you have reviewed.

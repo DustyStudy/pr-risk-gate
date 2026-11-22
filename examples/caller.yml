@@ -8,7 +8,7 @@
 name: PR risk gate
 
 on:
-  workflow_run:
+  workflow_run:  # zizmor: ignore[dangerous-triggers] - reads only the pinned gate; no PR code runs here
     # The name of the trigger workflow (examples/pr-trigger.yml).
     workflows: ["pr-trigger"]
     types: [completed]
@@ -20,10 +20,14 @@ jobs:
     # Only what the reusable job's GITHUB_TOKEN needs (cloning). The check is posted by the App token.
     permissions:
       contents: read
-    # REPLACE the all-zero placeholder with the full 40-character commit SHA of the release you
-    # reviewed, and set the version comment to match. The gate runs its scripts and policy from this SHA.
+    # REPLACE the all-zero placeholder with the full 40-character commit SHA of the gate release you
+    # reviewed, and set the trailing comment to that release's tag. The gate runs its scripts and policy from this SHA.
     uses: DustyStudy/pr-risk-gate/.github/workflows/pr-gate.yml@0000000000000000000000000000000000000000 # vX.Y.Z
     with:
       app_id: ${{ vars.PR_RISK_APP_ID }}
-    # No `secrets:` block and never `secrets: inherit`: the gate job reads both keys from its
-    # environment. Without ANTHROPIC_API_KEY every PR rates high.
+    # Pass both secrets by name. The values come from the pr-risk-gate environment, which the
+    # gate job enters; these repository-level names resolve to nothing, so no repository secret may exist with them.
+    secrets:
+      PR_RISK_APP_KEY: ${{ secrets.PR_RISK_APP_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    # Never `secrets: inherit`. Without ANTHROPIC_API_KEY every PR rates high.
