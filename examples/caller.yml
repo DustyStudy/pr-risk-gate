@@ -1,0 +1,29 @@
+# Copy to .github/workflows/pr-risk-gate.yml on the default branch of the target repo.
+# A `workflow_run` workflow always runs the default branch's copy of this file, so a PR
+# cannot change the code that uses the App key and the Anthropic key.
+# Setup (see README): an environment `pr-risk-gate`, restricted to the default branch, holding the
+# secrets PR_RISK_APP_KEY and ANTHROPIC_API_KEY; the repository variable PR_RISK_APP_ID; and a
+# ruleset that requires the `pr-risk-gate` check with its source pinned to the App.
+# Do NOT store the keys as repository secrets: a workflow on any branch can read those.
+name: PR risk gate
+
+on:
+  workflow_run:
+    # The name of the trigger workflow (examples/pr-trigger.yml).
+    workflows: ["pr-trigger"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  risk-gate:
+    # Only what the reusable job's GITHUB_TOKEN needs (cloning). The check is posted by the App token.
+    permissions:
+      contents: read
+    # REPLACE the all-zero placeholder with the full 40-character commit SHA of the release you
+    # reviewed, and set the version comment to match. The gate runs its scripts and policy from this SHA.
+    uses: DustyStudy/pr-risk-gate/.github/workflows/pr-gate.yml@0000000000000000000000000000000000000000 # vX.Y.Z
+    with:
+      app_id: ${{ vars.PR_RISK_APP_ID }}
+    # No `secrets:` block and never `secrets: inherit`: the gate job reads both keys from its
+    # environment. Without ANTHROPIC_API_KEY every PR rates high.

@@ -1,0 +1,19 @@
+# Example for .github/CODEOWNERS in a target repo. Replace the owners with your own teams.
+# Later rules take precedence over earlier ones.
+
+# Default: any reviewer with write access
+*                       @OWNER/engineering
+
+# Security-owned paths: the security team must approve these (enforce with "Require review from Code Owners")
+/.github/               @OWNER/security
+/.github/workflows/     @OWNER/security
+.gitattributes          @OWNER/security
+.gitmodules             @OWNER/security
+**/CODEOWNERS           @OWNER/security
+**/*iam*                @OWNER/security
+**/*kms*                @OWNER/security
+**/*security_group*     @OWNER/security
+**/auth/**              @OWNER/security
+**/crypto/**            @OWNER/security
+**/secrets/**           @OWNER/security
+**/*.tf                 @OWNER/security

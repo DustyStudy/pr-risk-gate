@@ -1,0 +1,12 @@
+# Later rules take precedence over earlier ones.
+# Single maintainer today. When a second maintainer exists, add them to the
+# rules below and raise the required approvals in branch protection.
+
+*                 @DustyStudy
+
+# Gate-critical paths
+/.github/         @DustyStudy
+/scripts/gate.py  @DustyStudy
+/scripts/risk.py  @DustyStudy
+/policy/          @DustyStudy
+/prompts/         @DustyStudy

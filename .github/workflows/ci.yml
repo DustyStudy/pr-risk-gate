@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+# Cancel superseded pull request runs only; pushes to main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint (shellcheck, ruff, compile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Shellcheck
+        run: shellcheck --severity=style scripts/*.sh
+
+      # Hash-pinned wheel, same pattern as the zizmor install below.
+      - name: Ruff and compile
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ruff"
+          echo "ruff==0.16.9 --hash=sha256:a21713e629d3e5bdb2f5c2def1cc7f04f47fa8e1a7eb0571b4a28e1da64bc728" > "$RUNNER_TEMP/ruff.txt"
+          "$RUNNER_TEMP/ruff/bin/pip" install --quiet --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/ruff.txt"
+          "$RUNNER_TEMP/ruff/bin/ruff" check .
+          python3 -m py_compile scripts/*.py
+
+      # Untrusted event text must reach a shell through env:, never by interpolation.
+      # shortcut: indentation-based scan of run: keys, not a YAML parser; zizmor's template-injection audit is the deeper check.
+      - name: No event interpolation in run blocks
+        run: |
+          awk '
+            { ind = match($0, /[^ ]/) - 1 }
+            /^ *(- )?run:/ { key = ind + ($0 ~ /^ *- / ? 2 : 0); inrun = 1 }
+            inrun && NF && ind <= key && $0 !~ /^ *(- )?run:/ { inrun = 0 }
+            inrun && /[$][{][{].*github[.]event/ { print FILENAME ":" FNR ": " $0; bad = 1 }
+            END { exit bad }
+          ' .github/workflows/*.yml
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+
+  gitleaks:
+    name: Secrets (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan full history for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  zizmor:
+    name: Workflow security (zizmor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Hash-pinned wheel, same as issue-factory's CI.
+      - name: Install zizmor
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          echo "zizmor==1.30.1 --hash=sha256:eee12266b793cb87ad4a7e3af2e72404f8a63e3de5eb099b80bf7b1cfd232a8e" > "$RUNNER_TEMP/zizmor.txt"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/zizmor.txt"
+
+      # zizmor exits non-zero on any finding at or above --min-severity, which fails the job.
+      - name: Audit workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --format github --min-severity medium .github'

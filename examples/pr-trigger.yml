@@ -1,0 +1,24 @@
+# Copy to .github/workflows/pr-trigger.yml on the default branch of the target repo.
+# It does nothing. It exists only so its completion fires the `workflow_run` caller
+# (examples/caller.yml), which runs the gate from the default branch.
+# `pull_request_target` runs the default branch's copy of this file, with the base repo's context.
+# The job must NEVER check out or run PR code, and must stay free of secrets and real steps
+# (`pull_request_review` still runs the PR's copy of this file).
+# The caller finds this workflow by its name, so do not rename it.
+name: pr-trigger
+
+on:
+  # No `branches:` filter: the gate itself refuses a PR that does not target the default branch.
+  # `edited` covers a base-branch change.
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "pr trigger"

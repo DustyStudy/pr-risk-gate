@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "check_name": "pr-risk-gate",
+  "approvals": {"low": 1, "medium": 2, "high": 2},
+  "size": {
+    "medium_lines": 300,
+    "high_lines": 1000,
+    "medium_files": 10,
+    "high_files": 30
+  },
+  "path_rules": [
+    {"risk": "high", "reason": "CI or workflow file", "globs": [".github/**"]},
+    {"risk": "high", "reason": "Git plumbing file", "globs": ["**/.gitmodules", "**/.gitattributes", "**/CODEOWNERS"]},
+    {"risk": "high", "reason": "Infrastructure as code", "globs": ["**/*.tf", "**/*.tfvars", "**/*.tf.json", "**/*.hcl"]},
+    {"risk": "high", "reason": "Auth, crypto, secrets, or IAM", "globs": ["**/auth/**", "**/*auth*", "**/*auth*/**", "**/crypto/**", "**/secrets/**", "**/*iam*", "**/*iam*/**", "**/*kms*", "**/*kms*/**", "**/*security_group*", "**/*security_group*/**"]},
+    {"risk": "medium", "reason": "Dependency or build file", "globs": ["**/package-lock.json", "**/package.json", "**/yarn.lock", "**/pnpm-lock.yaml", "**/poetry.lock", "**/pyproject.toml", "**/requirements*.txt", "**/Dockerfile*", "**/go.mod", "**/go.sum", "**/Cargo.toml", "**/Cargo.lock", "**/Gemfile", "**/Gemfile.lock", "**/pom.xml", "**/*.gradle*"]}
+  ],
+  "deleted_test_risk": "high",
+  "secret_patterns": [
+    {"name": "AWS access key id", "regex": "AKIA[0-9A-Z]{16}"},
+    {"name": "private key block", "regex": "-----BEGIN [A-Z ]*PRIVATE KEY-----"},
+    {"name": "generic token assignment", "regex": "(?i)(api[_-]?key|secret|token|password)\\s*[:=]\\s*['\"][^'\"\\s]{12,}['\"]"}
+  ]
+}

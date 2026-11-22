@@ -1,0 +1,202 @@
+name: PR risk gate
+
+# Reusable workflow. A target repo calls it from a `workflow_run` caller on its default branch
+# (see examples/caller.yml), so this file is never under a PR's control. Both keys are secrets of
+# the target repo's `pr-risk-gate` environment; the caller passes no secrets.
+# It rates the PR's merge risk, counts approvals on the head commit, and posts the
+# `pr-risk-gate` check run as a dedicated GitHub App. Scripts and policy come from this repo
+# at the caller's pinned SHA. The PR is untrusted: it is checked out for `git diff` only and
+# is never executed.
+# Contract: SPEC.md
+
+on:
+  workflow_call:
+    inputs:
+      app_id:
+        description: ID of the GitHub App that posts the check (a variable, not a secret).
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Repository secrets are readable by a workflow on any branch. Environment secrets are not,
+    # so both keys live in this environment (restrict it to the default branch).
+    environment: pr-risk-gate
+    # Only the newest evaluation of a head commit runs to completion, so an older run cannot post last.
+    concurrency:
+      group: pr-risk-gate-${{ github.event.workflow_run.head_sha }}
+      cancel-in-progress: true
+    # GITHUB_TOKEN only clones. Every PR read and the check itself use the App token.
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    # Event data reaches scripts through these variables only, never through ${{ }} in a script.
+    # None of them is a secret.
+    env:
+      REPO: ${{ github.repository }}
+      APP_ID: ${{ inputs.app_id }}
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      BASE_SHA: ${{ github.event.workflow_run.pull_requests[0].base.sha }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      # Only same-repository PRs are rated (SPEC rule 6). A fork run, or a run with no PR,
+      # fails here; the last step then posts the failing check as the App.
+      - name: Guard (same-repository PR only)
+        env:
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          if [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::error::pr-risk-gate: the head repository is not this repository (fork PRs are not rated)"
+            exit 1
+          fi
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::pr-risk-gate: no pull request is attached to this workflow run"
+            exit 1
+          fi
+          if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::pr-risk-gate: base or head SHA is missing or malformed"
+            exit 1
+          fi
+
+      - name: Checkout gate at the pinned workflow SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: DustyStudy/pr-risk-gate
+          ref: ${{ job.workflow_sha }}
+          path: gate
+          persist-credentials: false
+
+      # An empty ref would make checkout fall back to the default branch. Fail closed instead.
+      - name: Verify the gate checkout matches the pin
+        env:
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if [ -z "$WORKFLOW_SHA" ]; then
+            echo "::error::pr-risk-gate: job.workflow_sha is empty"
+            exit 1
+          fi
+          if [ "$(git -C gate rev-parse HEAD)" != "$WORKFLOW_SHA" ]; then
+            echo "::error::pr-risk-gate: the gate checkout is not at the pinned workflow SHA"
+            exit 1
+          fi
+
+      - name: Checkout target at the PR head (data only, never executed)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          path: target
+          persist-credentials: false
+
+      # The App key (environment secret) goes to this action only. The token is limited to this
+      # repository and to the three permissions the gate uses. Runs after an earlier failure or a
+      # cancel too, so the last step can still post the failing check as the App.
+      - name: Mint the App token
+        id: app
+        if: ${{ always() }}
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ inputs.app_id }}
+          private-key: ${{ secrets.PR_RISK_APP_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-checks: write
+          permission-pull-requests: read
+          permission-contents: read
+
+      # A review does not change the diff, so reuse the rating stored on the head commit's check run.
+      # gate.py trusts only check runs posted by this App. Any failure or empty result means a fresh rating.
+      - name: Read cached rating
+        id: cache
+        if: env.PR_NUMBER != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          if python3 gate/scripts/gate.py rating-cache get --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --app-id "$APP_ID" \
+            > "$RUNNER_TEMP/cached.json" \
+            && [ -s "$RUNNER_TEMP/cached.json" ]; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deterministic risk (no token, no key)
+        if: steps.cache.outputs.hit != 'true'
+        working-directory: target
+        run: |
+          python3 "$GITHUB_WORKSPACE/gate/scripts/risk.py" \
+            --policy "$GITHUB_WORKSPACE/gate/policy/policy.json" \
+            --base "$BASE_SHA" --head "$HEAD_SHA" > "$RUNNER_TEMP/deterministic.json"
+
+      # Same flags as risk.py, so the PR's .gitattributes or diff drivers cannot hide the content.
+      - name: Write the diff (no token, no key)
+        if: steps.cache.outputs.hit != 'true'
+        run: |
+          git -c core.quotePath=false -C target diff --no-ext-diff --no-textconv --text "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/pr.diff"
+
+      # Outside the workspace, so no file from the PR can act as npm config. No install scripts.
+      - name: Install Claude Code
+        if: steps.cache.outputs.hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: npm install -g --ignore-scripts "@anthropic-ai/claude-code@2.1.317"
+
+      # The Anthropic key (environment secret) exists in this step only. The script exits 0 on every path and
+      # prints a high-risk fallback on any failure (or when there is no key).
+      - name: AI risk (API key only here, no token, no tools)
+        if: steps.cache.outputs.hit != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DIFF_FILE: ${{ runner.temp }}/pr.diff
+        run: |
+          bash gate/scripts/ai_rate.sh > "$RUNNER_TEMP/ai.json"
+
+      # jq parses both files, so model output is never spliced in as text. Empty or bad JSON fails the job.
+      - name: Combine rating
+        if: steps.cache.outputs.hit != 'true'
+        run: |
+          jq -n --slurpfile d "$RUNNER_TEMP/deterministic.json" --slurpfile a "$RUNNER_TEMP/ai.json" \
+            '{deterministic: ($d[0] // error("no deterministic rating")), ai: ($a[0] // error("no AI rating"))}' \
+            > "$RUNNER_TEMP/rating.json"
+
+      - name: Use the cached rating
+        if: steps.cache.outputs.hit == 'true'
+        run: cp "$RUNNER_TEMP/cached.json" "$RUNNER_TEMP/rating.json"
+
+      # Decides pass or fail. gate.py validates the rating and re-reads the PR itself.
+      # It refuses a PR whose base is not the default branch (the trigger has no branch filter).
+      - name: Count approvals and post the check
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          python3 gate/scripts/gate.py run --repo "$REPO" --pr "$PR_NUMBER" --head-sha "$HEAD_SHA" --app-id "$APP_ID" \
+            --base-ref "$DEFAULT_BRANCH" --policy gate/policy/policy.json --rating "$RUNNER_TEMP/rating.json"
+
+      # A job that dies or is cancelled before the verdict must not leave an older success on this
+      # commit (SPEC rule 8). Never `always()`: a successful run must not post a failure.
+      # Skipped when the App's newest check already fails (the gate's own verdict), so its rating marker
+      # stays newest. Checks from any other app are ignored, so a fake failure cannot suppress this one.
+      # If the token could not be minted, this step fails too: nothing but the App may post the check.
+      - name: Fail the check if the job failed or was cancelled before a verdict
+        if: ${{ failure() || cancelled() }}
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          latest="$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=pr-risk-gate&per_page=100" \
+            | jq -r --arg app "$APP_ID" \
+              '[.check_runs[] | select((.app.id | tostring) == $app)] | max_by(.id) | .conclusion' || true)"
+          if [ "$latest" != "failure" ]; then
+            gh api -X POST "repos/$REPO/check-runs" \
+              -f name=pr-risk-gate -f head_sha="$HEAD_SHA" -f status=completed -f conclusion=failure \
+              -f 'output[title]=pr-risk-gate: error' \
+              -f 'output[summary]=gate job failed or was cancelled before a verdict'
+          fi
