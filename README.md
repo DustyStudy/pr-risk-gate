@@ -2,9 +2,15 @@
 
 A merge gate that rates each pull request's risk and sets how many human approvals it needs.
 
-- **Low** risk: 1 approval.
-- **Medium** risk: 2 approvals.
-- **High** risk: 2 approvals, plus CODEOWNERS sign-off on security-owned paths.
+Tiers follow Anthropic's own review model:
+
+- **Low** risk (smaller changes, like a typo or lint fix): no human approval. The AI review must return PASS.
+- **Medium** risk (most changes): 1 human approval, plus the AI review PASS.
+- **High** risk (riskiest changes): 2 human approvals, plus the AI review PASS and CODEOWNERS sign-off on security-owned paths.
+
+Every tier also requires the AI review verdict PASS. The review is one Claude call per PR, with no tools, that judges correctness and security as well as risk.
+
+Because low-risk changes need no human, the ruleset's native "required approving reviews" must be **0**. The gate enforces the counts, not GitHub.
 
 The rating comes from two sources, and the higher one wins:
 
@@ -67,7 +73,7 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 6. **Add a branch ruleset** on the default branch:
    - Require status check `pr-risk-gate`, with its source pinned to the App.
    - Require your existing CI checks too. The gate does not replace tests.
-   - Require approving reviews: **1**. The gate raises this to 2 where needed.
+   - Require approving reviews: **0**. The gate sets the human count per tier (0, 1 or 2).
    - Require review from Code Owners.
    - Dismiss stale approvals on new pushes.
    - Require approval of the most recent reviewable push.

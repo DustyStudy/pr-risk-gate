@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# AI rating: one tool-less Claude call over the PR diff. Prints one JSON line: {"risk","reason"}.
-# Fails closed: every failure path prints risk "high" and exits 0 (SPEC security rule 3).
+# AI rating: one tool-less Claude call over the PR diff. Prints one JSON line: {"risk","verdict","reason"}.
+# Fails closed: every failure path prints risk "high", verdict "CHANGES" and exits 0 (SPEC security rule 3).
 set -euo pipefail
 
 here="$(dirname "$0")"
@@ -10,7 +10,7 @@ budget="${RISK_BUDGET:-0.25}"
 
 # Callers pass fixed text only, never model output, so printf is safe here.
 fallback() {
-  printf '{"risk":"high","reason":"%s"}\n' "$1"
+  printf '{"risk":"high","verdict":"CHANGES","reason":"%s"}\n' "$1"
   exit 0
 }
 
@@ -34,6 +34,6 @@ jq -c '{is_error, subtype, num_turns, total_cost_usd}' "$work/out.json" >&2 2>/d
 [ "$rc" -eq 0 ] || fallback "AI rating unavailable: CLI exit $rc"
 
 reply="$(python3 "$here/json_field.py" "$work/out.json")" || fallback "AI rating unavailable: no valid reply"
-# jq rebuilds the object, so only the two validated fields reach stdout, on one line.
-jq -ce 'select((.risk | IN("low", "medium", "high")) and (.reason | type == "string")) | {risk, reason}' <<<"$reply" \
+# jq rebuilds the object, so only the three validated fields reach stdout, on one line.
+jq -ce 'select((.risk | IN("low", "medium", "high")) and (.verdict | IN("PASS", "CHANGES")) and (.reason | type == "string")) | {risk, verdict, reason}' <<<"$reply" \
   || fallback "AI rating unavailable: invalid rating"

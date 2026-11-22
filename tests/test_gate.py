@@ -15,7 +15,7 @@ import gate  # noqa: E402
 HEAD = "a" * 40
 OLD = "b" * 40
 APP = 4242
-POLICY = {"check_name": "pr-risk-gate", "approvals": {"low": 1, "medium": 2, "high": 2}}
+POLICY = {"check_name": "pr-risk-gate", "approvals": {"low": 0, "medium": 1, "high": 2}}
 
 
 def review(login, state, commit=HEAD, at="2026-01-01T00:00:00Z", type="User", assoc="MEMBER"):
@@ -27,11 +27,15 @@ def pull(sha=HEAD, state="open", login="alice", number=7, base="main"):
     return {"number": number, "state": state, "head": {"sha": sha}, "user": {"login": login}, "base": {"ref": base}}
 
 
-def rating(det="low", ai="low"):
-    return {
+def rating(det="low", ai="low", verdict="PASS"):
+    """verdict=None leaves the field out (a rating from before the verdict existed)."""
+    r = {
         "deterministic": {"risk": det, "reasons": ["CI or workflow file"], "files": 1, "lines": 2},
-        "ai": {"risk": ai, "reason": "looks --> fine"},
+        "ai": {"risk": ai, "verdict": verdict, "reason": "looks --> fine"},
     }
+    if verdict is None:
+        del r["ai"]["verdict"]
+    return r
 
 
 class ApproverTests(unittest.TestCase):
@@ -113,7 +117,25 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(gate.max_rank("high", "low"), "high")
         self.assertEqual(gate.max_rank("low", "low"), "low")
         self.assertEqual(gate.decide(rating("low", "high"), 1, POLICY), (False, "high", 2))
-        self.assertEqual(gate.decide(rating("medium", "low"), 2, POLICY), (True, "medium", 2))
+        self.assertEqual(gate.decide(rating("medium", "low"), 2, POLICY), (True, "medium", 1))
+
+    def test_low_risk_pass_needs_no_approval(self):
+        self.assertEqual(gate.decide(rating("low"), 0, POLICY), (True, "low", 0))
+
+    def test_changes_fails_even_with_enough_approvals(self):
+        self.assertEqual(gate.decide(rating("low", verdict="CHANGES"), 2, POLICY), (False, "low", 0))
+        self.assertEqual(gate.failures(rating("low", verdict="CHANGES"), 2, 0), ["AI review: CHANGES"])
+
+    def test_missing_or_unknown_verdict_fails_closed(self):
+        for verdict in (None, "pass", "PASS ", "APPROVE", "", True, 1, ["PASS"]):
+            with self.subTest(verdict=verdict):
+                self.assertEqual(gate.decide(rating("low", verdict=verdict), 2, POLICY), (False, "low", 0))
+
+    def test_failures_name_each_unmet_condition(self):
+        self.assertEqual(gate.failures(rating("high"), 2, 2), [])
+        self.assertEqual(gate.failures(rating("high"), 1, 2), ["approvals 1 of 2 required"])
+        self.assertEqual(gate.failures(rating("high", verdict=None), 1, 2),
+                         ["AI review: CHANGES", "approvals 1 of 2 required"])
 
     def test_unknown_risk_fails_closed(self):
         with self.assertRaises(ValueError):
@@ -135,15 +157,26 @@ class PayloadTests(unittest.TestCase):
         p = gate.build_check_payload(POLICY, 7, HEAD, r, {"bob"}, False, "high", 2)
         self.assertEqual((p["name"], p["head_sha"], p["status"], p["conclusion"]),
                          ("pr-risk-gate", HEAD, "completed", "failure"))
-        for part in ("high", "1 of 2", "CI or workflow file", "looks --> fine", "bob"):
+        for part in ("high", "1 of 2", "CI or workflow file", "looks --> fine", "bob", "**AI review:** PASS",
+                     "**Failed:** approvals 1 of 2 required"):
             self.assertIn(part, p["output"]["summary"])
+        for verdict in ("CHANGES", None, "<b>PASS"):  # the summary never shows a raw verdict value
+            s = gate.build_check_payload(POLICY, 7, HEAD, rating("high", verdict=verdict), {"bob"}, False, "high", 2)
+            self.assertIn("**AI review:** CHANGES", s["output"]["summary"])
+            self.assertIn("**Failed:** AI review: CHANGES; approvals 1 of 2 required", s["output"]["summary"])
+            self.assertNotIn("<b>", s["output"]["summary"])
+        ok = gate.build_check_payload(POLICY, 7, HEAD, r, {"b", "c"}, True, "high", 2)["output"]["summary"]
+        self.assertNotIn("**Failed:**", ok)
         self.assertEqual(p["output"]["text"].count("-->"), 1)  # rating text cannot close the comment
         self.assertEqual(gate.parse_marker(p["output"]["text"]), {**r, "pr": 7})
         self.assertEqual(gate.build_check_payload(POLICY, 7, HEAD, r, {"b", "c"}, True, "high", 2)["conclusion"], "success")
 
     def test_parse_marker_rejects_bad_input(self):
         for text in (None, "", "no marker", "<!-- pr-risk-gate-rating: {oops -->",
-                     '<!-- pr-risk-gate-rating: {"deterministic":{"risk":"low"},"ai":{"risk":"bogus"}} -->'):
+                     '<!-- pr-risk-gate-rating: {"deterministic":{"risk":"low"},"ai":{"risk":"bogus","verdict":"PASS"}} -->',
+                     # No verdict string (a rating cached before the verdict existed): not reusable.
+                     '<!-- pr-risk-gate-rating: {"deterministic":{"risk":"low"},"ai":{"risk":"low"}} -->',
+                     '<!-- pr-risk-gate-rating: {"deterministic":{"risk":"low"},"ai":{"risk":"low","verdict":null}} -->'):
             self.assertIsNone(gate.parse_marker(text))
 
 
@@ -175,9 +208,9 @@ class CliTests(unittest.TestCase):
     def run_argv(self, policy=None, rating_path=None):
         return ["run", "--repo", "o/r", "--pr", "7", "--head-sha", HEAD, "--app-id", str(APP), "--base-ref", "main",
                 "--policy", policy or self.policy,
-                "--rating", rating_path or self.write("rating.json", rating("low", "medium"))]
+                "--rating", rating_path or self.write("rating.json", rating("low", "high"))]
 
-    def run_gate(self, reviews_out, pr=None, head_prs=None, commit=None, perms=None):
+    def run_gate(self, reviews_out, pr=None, head_prs=None, commit=None, perms=None, rating_data=None):
         """-> (exit code, stdout, gh calls).
         Calls: PR, PRs on the head commit, reviews, head commit, one permission per candidate, check POST.
         perms maps login -> permission (default write); the value "error" makes that lookup fail."""
@@ -197,7 +230,32 @@ class CliTests(unittest.TestCase):
             if f"commits/{HEAD}/pulls" in path:
                 return json.dumps(head_prs or [pull()])
             return json.dumps(pr or pull())
-        return self.run_main(self.run_argv(), route)
+        rating_path = self.write("rating.json", rating_data) if rating_data else None
+        return self.run_main(self.run_argv(rating_path=rating_path), route)
+
+    def test_run_verdict_and_approvals_per_tier(self):
+        reviews = [review("bob", "APPROVED"), review("carol", "APPROVED")]
+        cases = (  # (risk, verdict, approvals, exit code, text expected in the summary)
+            ("low", "PASS", 0, 0, "**AI review:** PASS"),
+            ("low", "CHANGES", 2, 1, "**Failed:** AI review: CHANGES"),
+            ("low", None, 2, 1, "**Failed:** AI review: CHANGES"),
+            ("low", "APPROVED", 2, 1, "**Failed:** AI review: CHANGES"),
+            ("medium", "PASS", 0, 1, "**Failed:** approvals 0 of 1 required"),
+            ("medium", "PASS", 1, 0, "1 of 1"),
+            ("medium", "CHANGES", 1, 1, "**Failed:** AI review: CHANGES"),
+            ("high", "PASS", 1, 1, "**Failed:** approvals 1 of 2 required"),
+            ("high", "PASS", 2, 0, "2 of 2"),
+            ("high", "CHANGES", 1, 1, "**Failed:** AI review: CHANGES; approvals 1 of 2 required"),
+        )
+        for risk, verdict, n, want, text in cases:
+            with self.subTest(risk=risk, verdict=verdict, approvals=n):
+                r = rating(risk, verdict=verdict)
+                code, _, calls = self.run_gate(json.dumps(reviews[:n]), rating_data=r)
+                body = json.loads(calls[-1][1])
+                self.assertEqual((code, body["conclusion"]), (want, "failure" if want else "success"))
+                self.assertIn(text, body["output"]["summary"])
+                # The marker keeps the rating as given; one without a verdict is not reusable from the cache.
+                self.assertEqual(gate.parse_marker(body["output"]["text"]), None if verdict is None else {**r, "pr": 7})
 
     def test_run_passes_across_pages_and_posts_check(self):
         pages = json.dumps([review("bob", "APPROVED")]) + json.dumps([review("carol", "APPROVED")])
@@ -246,7 +304,7 @@ class CliTests(unittest.TestCase):
 
     def test_run_takes_author_from_pr(self):
         both = json.dumps([review("alice", "APPROVED"), review("bob", "APPROVED")])
-        # alice wrote the PR: her approval does not count, so medium risk (2 required) fails.
+        # alice wrote the PR: her approval does not count, so high risk (2 required) fails.
         self.assertEqual(self.run_gate(both)[0], 1)
         self.assertEqual(self.run_gate(both, pr=pull(login="carol"), commit={"author": {"login": "carol"}})[0], 0)
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
@@ -329,6 +387,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.run_main(other, [json.dumps(runs)])[:2], (0, ""))
         # Marker without a pr field (older run) is a miss.
         runs["check_runs"][1]["output"]["text"] = "<!-- pr-risk-gate-rating: %s -->" % json.dumps(rating("high"))
+        self.assertEqual(self.run_main(argv, [json.dumps(runs)])[:2], (0, ""))
+        # Marker without a verdict (rated before the verdict existed) is a miss, so the PR is re-rated.
+        runs["check_runs"][1]["output"]["text"] = "<!-- pr-risk-gate-rating: %s -->" % json.dumps(
+            {**rating("high", verdict=None), "pr": 7})
         self.assertEqual(self.run_main(argv, [json.dumps(runs)])[:2], (0, ""))
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             gate.main(argv[:6] + argv[8:])  # --pr is required

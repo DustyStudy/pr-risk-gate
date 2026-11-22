@@ -59,11 +59,24 @@ def with_write_access(logins, permission_of):
     return ok
 
 
+def ai_verdict(rating):
+    """PASS only for the exact string; missing or any other value -> CHANGES (fail closed)."""
+    return "PASS" if rating["ai"].get("verdict") == "PASS" else "CHANGES"
+
+
+def failures(rating, approvals_count, required):
+    """The unmet conditions, as shown in the check output. Empty -> the check passes."""
+    return [
+        *(["AI review: CHANGES"] if ai_verdict(rating) != "PASS" else []),
+        *([f"approvals {approvals_count} of {required} required"] if approvals_count < required else []),
+    ]
+
+
 def decide(rating, approvals_count, policy):
-    """-> (passed, final, required)."""
+    """-> (passed, final, required). Passes iff the AI verdict is PASS and the approvals are met."""
     final = max_rank(rating["deterministic"]["risk"], rating["ai"]["risk"])
     required = policy["approvals"][final]
-    return approvals_count >= required, final, required
+    return not failures(rating, approvals_count, required), final, required
 
 
 def _code(text):
@@ -78,7 +91,9 @@ def build_check_payload(policy, pr, head_sha, rating, approvers, passed, final, 
     shown = reasons[:50]
     lines = [
         f"**Final risk:** {final} (deterministic: {rating['deterministic']['risk']}, AI: {rating['ai']['risk']})",
+        f"**AI review:** {ai_verdict(rating)}",
         f"**Approvals:** {len(approvers)} of {required} required on `{head_sha}`",
+        *([] if passed else ["**Failed:** " + ("; ".join(failures(rating, len(approvers), required)) or "see gate log")]),
         "",
         "**Reasons:**",
         *([f"- {_code(r)}" for r in shown] or ["- none"]),
@@ -111,7 +126,9 @@ def parse_marker(text):
         return None
     try:
         rating = json.loads(m.group(1))
-        if rating["deterministic"]["risk"] in RANKS and rating["ai"]["risk"] in RANKS:
+        # A rating cached before the verdict existed has none: a miss, so the PR is re-rated.
+        if (rating["deterministic"]["risk"] in RANKS and rating["ai"]["risk"] in RANKS
+                and isinstance(rating["ai"]["verdict"], str)):
             return rating
     except (ValueError, KeyError, TypeError):
         pass
