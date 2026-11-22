@@ -2,7 +2,7 @@ name: PR risk gate
 
 # Reusable workflow. A target repo calls it from a `workflow_run` caller on its default branch
 # (see examples/caller.yml), so this file is never under a PR's control. Both keys are secrets of
-# the target repo's `pr-risk-gate` environment; the caller passes no secrets.
+# the target repo's `pr-risk-gate` environment; the caller passes no secrets; the gate job reads its environment secrets by name.
 # It rates the PR's merge risk, counts approvals on the head commit, and posts the
 # `pr-risk-gate` check run as a dedicated GitHub App. Scripts and policy come from this repo
 # at the caller's pinned SHA. The PR is untrusted: it is checked out for `git diff` only and
@@ -17,11 +17,11 @@ on:
         type: string
         required: true
     secrets:
-      app_private_key:
-        description: Private key of the GitHub App. The caller passes the `pr-risk-gate` environment secret PR_RISK_APP_KEY.
+      PR_RISK_APP_KEY:
+        description: Private key of the GitHub App. Read from the pr-risk-gate environment; the caller passes nothing.
         required: true
-      anthropic_api_key:
-        description: Anthropic API key (environment secret ANTHROPIC_API_KEY). Without it the PR is rated high.
+      ANTHROPIC_API_KEY:
+        description: Anthropic API key from the pr-risk-gate environment. Without it the PR is rated high.
         required: false
 
 permissions: {}
@@ -116,7 +116,7 @@ jobs:
         uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           app-id: ${{ inputs.app_id }}
-          private-key: ${{ secrets.app_private_key }}
+          private-key: ${{ secrets.PR_RISK_APP_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-checks: write
@@ -162,7 +162,7 @@ jobs:
       - name: AI risk (API key only here, no token, no tools)
         if: steps.cache.outputs.hit != 'true'
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.anthropic_api_key }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DIFF_FILE: ${{ runner.temp }}/pr.diff
         run: |
           bash gate/scripts/ai_rate.sh > "$RUNNER_TEMP/ai.json"
