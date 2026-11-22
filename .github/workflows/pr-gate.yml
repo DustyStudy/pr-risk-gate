@@ -155,7 +155,12 @@ jobs:
       - name: Install Claude Code
         if: steps.cache.outputs.hit != 'true'
         working-directory: ${{ runner.temp }}
-        run: npm install -g --ignore-scripts "@anthropic-ai/claude-code@2.1.317"
+        # Install without lifecycle scripts, then run only the package's own installer that fetches the native
+        # binary. Other packages' install scripts stay blocked.
+        run: |
+          npm install -g --ignore-scripts "@anthropic-ai/claude-code@2.1.317"
+          node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs"
+          claude --version
 
       # The Anthropic key (environment secret) exists in this step only. The script exits 0 on every path and
       # prints a high-risk fallback on any failure (or when there is no key).
