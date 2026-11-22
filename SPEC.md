@@ -1,6 +1,6 @@
 # pr-risk-gate: build spec (the contract every file must match)
 
-Goal: rate each PR's merge risk, then require a number of human approvals that depends on that risk. Low-risk PRs need 0 human approvals, medium 1, high 2. Every tier also requires the AI review verdict to be PASS (one Claude call returns both risk and verdict). The ruleset's native required-approvals count is 0, so the gate enforces the counts. The gate posts a required status check named `pr-risk-gate` through a dedicated GitHub App, so no PR, workflow or personal token can post it.
+Goal: rate each PR's merge risk, then require a number of human approvals that depends on that risk. Low-risk PRs need 0 human approvals, medium 0 (solo mode), high 2. Every tier also requires the AI review verdict to be PASS (one Claude call returns both risk and verdict). The ruleset's native required-approvals count is 0, so the gate enforces the counts. The gate posts a required status check named `pr-risk-gate` through a dedicated GitHub App, so no PR, workflow or personal token can post it.
 
 This file is kept in step with the code. Where it and the code disagree, fix the one that is wrong and say so.
 
@@ -88,7 +88,7 @@ Subcommands:
    - Fetches the PR (`repos/R/pulls/N`): author login, head SHA and state. If the PR head SHA is not `--head-sha`, or the PR is not open, -> failure ("PR moved or closed").
    - Shared-commit check: lists open PRs whose head is `--head-sha` (`repos/R/commits/SHA/pulls`). More than one -> failure ("commit is the head of N open PRs").
    - Fetches all reviews (`--paginate`), applies rule 7, and counts distinct approvers.
-   - `final = max_rank(deterministic.risk, ai.risk)`, `required = policy.approvals[final]` (low 0, medium 1, high 2). Passes iff `ai.verdict == "PASS"` AND `len(approvers) >= required`. Any other verdict value counts as CHANGES.
+   - `final = max_rank(deterministic.risk, ai.risk)`, `required = policy.approvals[final]` (low 0, medium 0, high 2). Passes iff `ai.verdict == "PASS"` AND `len(approvers) >= required`. Any other verdict value counts as CHANGES.
    - Posts a completed check run as the App: `name=policy.check_name`, `head_sha`, `conclusion=success|failure`, `output.title`, `output.summary` (final risk, required vs. have, reasons, approver logins; reasons and logins rendered inert and capped), and `output.text` = the marker with rating and `pr`.
    - Exit 0 on pass, 1 on fail.
    - On any error after the PR is identified: print the cause to stderr, post a failing check on the same SHA with no marker (best effort, errors ignored), exit 1. If the check name cannot be read from the policy, use the default `pr-risk-gate`.
