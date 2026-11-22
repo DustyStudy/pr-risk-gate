@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """pr-risk-gate: count approvals, read the rating cache, post the required check run. See SPEC.md."""
 import argparse
 import json
@@ -15,6 +14,8 @@ TEXT_LIMIT = 65535  # GitHub cap on check run output.summary and output.text
 HUMAN_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 DEFAULT_CHECK_NAME = "pr-risk-gate"  # used when the policy file cannot be read; matches policy.check_name
 WRITE_PERMISSIONS = ("admin", "maintain", "write")
+# What gh_api itself raises: gh failed, gh missing, or output that is not JSON.
+GH_ERRORS = (subprocess.CalledProcessError, OSError, ValueError)
 
 
 # ---- pure functions (no I/O) ----
@@ -54,8 +55,9 @@ def with_write_access(logins, permission_of):
         try:
             if permission_of(login) in WRITE_PERMISSIONS:
                 ok.add(login)
-        except Exception:  # one bad lookup drops that login only; it never adds an approval
-            pass
+        # One bad lookup (gh error or unexpected response shape) drops that login only; it never adds an approval.
+        except (*GH_ERRORS, LookupError, TypeError) as e:
+            print(f"permission lookup failed for {login}: {_cause(e)}", file=sys.stderr)
     return ok
 
 
@@ -147,6 +149,14 @@ class GateFailure(Exception):
     """A gate rule failed (not an API or parse error)."""
 
 
+def _cause(e):
+    if isinstance(e, GateFailure):
+        return str(e)
+    if isinstance(e, subprocess.CalledProcessError):
+        return f"gh api failed: {(e.stderr or '').strip()}"
+    return f"{type(e).__name__}: {e}"
+
+
 def gh_api(args, body=None):
     """Run `gh api`; return the list of JSON documents printed (one per page with --paginate)."""
     out = subprocess.run(
@@ -175,15 +185,17 @@ def cmd_cache_get(args):
         rating = parse_marker(max(runs, key=lambda r: r["id"])["output"]["text"]) if runs else None
         if rating and rating.pop("pr", None) == args.pr:
             print(json.dumps(rating, separators=(",", ":")))
-    except Exception:  # cache miss by contract: print nothing, exit 0, caller re-rates
-        pass
+    # Cache miss by contract: nothing on stdout, exit 0, caller re-rates.
+    # Covers an unreadable policy, a gh error and a response of an unexpected shape.
+    except (*GH_ERRORS, LookupError, TypeError, AttributeError) as e:
+        print(f"rating cache miss: {_cause(e)}", file=sys.stderr)
     return 0
 
 
 def cmd_run(args):
     try:  # resolve the name first so the failure check below can always be posted
         check_name = load_json(args.policy)["check_name"]
-    except Exception:
+    except (OSError, ValueError, LookupError, TypeError):  # unreadable, not JSON, no such key, not an object
         check_name = DEFAULT_CHECK_NAME
     try:
         pr = gh_api([f"repos/{args.repo}/pulls/{args.pr}"])[0]
@@ -211,13 +223,10 @@ def cmd_run(args):
         passed, final, required = decide(rating, len(approvers), policy)
         payload = build_check_payload(policy, args.pr, args.head_sha, rating, approvers, passed, final, required)
         gh_api(["-X", "POST", f"repos/{args.repo}/check-runs", "--input", "-"], body=json.dumps(payload))
-    except Exception as e:  # fail closed on any API or parse error
-        if isinstance(e, GateFailure):
-            cause = str(e)
-        elif isinstance(e, subprocess.CalledProcessError):
-            cause = f"gh api failed: {(e.stderr or '').strip()}"
-        else:
-            cause = f"{type(e).__name__}: {e}"
+    # Fail closed on any error, known or not: an uncaught one would skip the failure check below
+    # and leave an earlier success standing on this SHA. Logged to stderr and posted, never silent.
+    except Exception as e:  # noqa: BLE001
+        cause = _cause(e)
         print(f"gate error: {cause}", file=sys.stderr)
         try:  # best effort: replace any earlier success on this SHA; no marker, so nothing is cached
             gh_api(["-X", "POST", f"repos/{args.repo}/check-runs", "--input", "-"], body=json.dumps({
@@ -225,8 +234,8 @@ def cmd_run(args):
                 "status": "completed", "conclusion": "failure",
                 "output": {"title": "gate error", "summary": "gate error: " + _code(cause)},
             }))
-        except Exception:
-            pass
+        except GH_ERRORS as post_error:
+            print(f"gate error: failure check not posted: {_cause(post_error)}", file=sys.stderr)
         return 1
     print(f"{'PASS' if passed else 'FAIL'}: {payload['output']['title']}")
     return 0 if passed else 1

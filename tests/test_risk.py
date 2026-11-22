@@ -9,7 +9,7 @@ import unittest
 SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, SCRIPTS)
 
-import risk  # noqa: E402
+import risk
 
 # Mirrors policy/policy.json (test_shipped_policy_matches keeps the path rules in sync).
 POLICY = {
@@ -263,31 +263,29 @@ class ParseTest(unittest.TestCase):
 
     def test_name_status_errors(self):
         for bad in ("X\0a.py\0", "M\0", "R100\0only-one\0"):
-            with self.subTest(bad=bad):
-                with self.assertRaises((ValueError, IndexError)):
-                    risk.parse_name_status(bad)
+            with self.subTest(bad=bad), self.assertRaises((ValueError, IndexError)):
+                risk.parse_name_status(bad)
 
     def test_patch(self):
-        out = "\n".join([
-            "diff --git a/a.py b/a.py",
-            "index 111..222 100644",
-            "--- a/a.py",
-            "+++ b/a.py",
-            "@@ -3,2 +3 @@ def f():",
-            "-old one",
-            "-old two",
-            "+new",
-            "@@ -9,0 +9,2 @@",
-            "+++ b/not-a-header",       # added line whose text starts with "++ "
-            "+last",
-            "\\ No newline at end of file",
-            "diff --git a/gone.py b/gone.py",
-            "--- a/gone.py",
-            "+++ /dev/null",
-            "@@ -1 +0,0 @@",
-            "-bye",
-            "",
-        ])
+        out = (
+            "diff --git a/a.py b/a.py\n"
+            "index 111..222 100644\n"
+            "--- a/a.py\n"
+            "+++ b/a.py\n"
+            "@@ -3,2 +3 @@ def f():\n"
+            "-old one\n"
+            "-old two\n"
+            "+new\n"
+            "@@ -9,0 +9,2 @@\n"
+            "+++ b/not-a-header\n"       # added line whose text starts with "++ "
+            "+last\n"
+            "\\ No newline at end of file\n"
+            "diff --git a/gone.py b/gone.py\n"
+            "--- a/gone.py\n"
+            "+++ /dev/null\n"
+            "@@ -1 +0,0 @@\n"
+            "-bye\n"
+        )
         added, deleted = risk.parse_patch(out)
         self.assertEqual(added, [("a.py", 3, "new"), ("a.py", 9, "++ b/not-a-header"),
                                  ("a.py", 10, "last")])
@@ -315,15 +313,14 @@ class ParseTest(unittest.TestCase):
 
     def test_quoted_test_path_shrunk(self):
         path = 'tests/test_a"b.py'
-        out = "\n".join([
-            'diff --git "a/tests/test_a\\"b.py" "b/tests/test_a\\"b.py"',
-            '--- "a/tests/test_a\\"b.py"',
-            '+++ "b/tests/test_a\\"b.py"',
-            "@@ -2,2 +1,0 @@",
-            "-one",
-            "-two",
-            "",
-        ])
+        out = (
+            'diff --git "a/tests/test_a\\"b.py" "b/tests/test_a\\"b.py"\n'
+            '--- "a/tests/test_a\\"b.py"\n'
+            '+++ "b/tests/test_a\\"b.py"\n'
+            "@@ -2,2 +1,0 @@\n"
+            "-one\n"
+            "-two\n"
+        )
         added, deleted = risk.parse_patch(out)
         self.assertEqual((added, deleted), ([], {path: 2}))
         r = classify(risk.parse_name_status(f"M\0{path}\0"), added, deleted)
@@ -371,7 +368,7 @@ class CliTest(unittest.TestCase):
         return subprocess.run(
             [sys.executable, os.path.join(SCRIPTS, "risk.py"), "--policy", self.policy,
              f"--base={base}", f"--head={head}"],
-            cwd=self.repo, capture_output=True, text=True)
+            cwd=self.repo, capture_output=True, text=True, check=False)
 
     def test_end_to_end(self):
         self.write("src/app.py", "a\nB\nc\nkey = '" + FAKE_KEY + "'\n")

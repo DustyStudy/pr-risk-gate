@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
-import gate  # noqa: E402
+import gate
 
 HEAD = "a" * 40
 OLD = "b" * 40
@@ -330,7 +330,8 @@ class CliTests(unittest.TestCase):
 
     def test_run_error_posts_failure_check_and_swallows_post_error(self):
         argv = self.run_argv()
-        for second in ([{}], RuntimeError("post failed too")):
+        # The first error is deliberately not a gh one: the gate fails closed on anything.
+        for second in ([{}], subprocess.CalledProcessError(1, "gh", stderr="post failed too")):
             with self.subTest(second=second), contextlib.redirect_stderr(io.StringIO()), \
                     mock.patch.object(gate, "gh_api", side_effect=[RuntimeError("boom"), second]) as api:
                 self.assertEqual(gate.main(argv), 1)
@@ -386,11 +387,11 @@ class CliTests(unittest.TestCase):
         other = [a if a != "7" else "8" for a in argv]
         self.assertEqual(self.run_main(other, [json.dumps(runs)])[:2], (0, ""))
         # Marker without a pr field (older run) is a miss.
-        runs["check_runs"][1]["output"]["text"] = "<!-- pr-risk-gate-rating: %s -->" % json.dumps(rating("high"))
+        runs["check_runs"][1]["output"]["text"] = f"<!-- pr-risk-gate-rating: {json.dumps(rating('high'))} -->"
         self.assertEqual(self.run_main(argv, [json.dumps(runs)])[:2], (0, ""))
         # Marker without a verdict (rated before the verdict existed) is a miss, so the PR is re-rated.
-        runs["check_runs"][1]["output"]["text"] = "<!-- pr-risk-gate-rating: %s -->" % json.dumps(
-            {**rating("high", verdict=None), "pr": 7})
+        no_verdict = json.dumps({**rating("high", verdict=None), "pr": 7})
+        runs["check_runs"][1]["output"]["text"] = f"<!-- pr-risk-gate-rating: {no_verdict} -->"
         self.assertEqual(self.run_main(argv, [json.dumps(runs)])[:2], (0, ""))
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             gate.main(argv[:6] + argv[8:])  # --pr is required

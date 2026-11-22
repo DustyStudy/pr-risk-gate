@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Deterministic PR risk rating. See SPEC.md."""
 import argparse
 import json
@@ -132,7 +131,7 @@ def parse_patch(out):
         elif line.startswith("+++ "):
             # git quotes a path holding a double quote, backslash or control character, whatever core.quotePath says.
             path = unquote_git(line[4:].rstrip("\t"))
-            path = path[2:] if path.startswith("b/") else path
+            path = path.removeprefix("b/")
         else:
             m = HUNK.match(line)
             if m:
@@ -147,7 +146,7 @@ def parse_patch(out):
 def git_diff(*args):
     # --text: a PR-supplied .gitattributes `-diff` must not hide lines from the scan.
     cmd = ["git", "-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-textconv", "--text", *args, "--"]
-    r = subprocess.run(cmd, capture_output=True)
+    r = subprocess.run(cmd, capture_output=True, check=False)
     if r.returncode != 0:
         raise RuntimeError(f"git diff failed: {r.stderr.decode('utf-8', 'replace').strip()}")
     return r.stdout.decode("utf-8", "replace")
@@ -168,7 +167,9 @@ def main():
         changes = parse_name_status(git_diff("--name-status", "-M", "-z", rng))
         added, deleted = parse_patch(git_diff("-U0", rng))
         result = classify(changes, added, policy, deleted)
-    except Exception as e:  # fail closed: any git, policy or parse error fails the gate
+    # Fail closed: any git, policy or parse error fails the gate with one stderr line and exit 1.
+    # A policy file of the wrong shape can raise almost anything, so the catch stays broad.
+    except Exception as e:  # noqa: BLE001
         print(f"risk.py: {e}", file=sys.stderr)
         return 1
     print(json.dumps(result))
