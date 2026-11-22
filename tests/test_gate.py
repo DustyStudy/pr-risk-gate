@@ -15,7 +15,7 @@ import gate
 HEAD = "a" * 40
 OLD = "b" * 40
 APP = 4242
-POLICY = {"check_name": "pr-risk-gate", "approvals": {"low": 0, "medium": 0, "high": 2}}
+POLICY = {"check_name": "pr-risk-gate", "approvals": {"low": 0, "medium": 1, "high": 2}}
 
 
 def review(login, state, commit=HEAD, at="2026-01-01T00:00:00Z", type="User", assoc="MEMBER"):
@@ -117,7 +117,7 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(gate.max_rank("high", "low"), "high")
         self.assertEqual(gate.max_rank("low", "low"), "low")
         self.assertEqual(gate.decide(rating("low", "high"), 1, POLICY), (False, "high", 2))
-        self.assertEqual(gate.decide(rating("medium", "low"), 2, POLICY), (True, "medium", 0))
+        self.assertEqual(gate.decide(rating("medium", "low"), 2, POLICY), (True, "medium", 1))
 
     def test_low_risk_pass_needs_no_approval(self):
         self.assertEqual(gate.decide(rating("low"), 0, POLICY), (True, "low", 0))
@@ -240,8 +240,8 @@ class CliTests(unittest.TestCase):
             ("low", "CHANGES", 2, 1, "**Failed:** AI review: CHANGES"),
             ("low", None, 2, 1, "**Failed:** AI review: CHANGES"),
             ("low", "APPROVED", 2, 1, "**Failed:** AI review: CHANGES"),
-            ("medium", "PASS", 0, 0, "0 of 0"),
-            ("medium", "CHANGES", 0, 1, "**Failed:** AI review: CHANGES"),
+            ("medium", "PASS", 0, 1, "**Failed:** approvals 0 of 1 required"),
+            ("medium", "PASS", 1, 0, "1 of 1"),
             ("medium", "CHANGES", 1, 1, "**Failed:** AI review: CHANGES"),
             ("high", "PASS", 1, 1, "**Failed:** approvals 1 of 2 required"),
             ("high", "PASS", 2, 0, "2 of 2"),
