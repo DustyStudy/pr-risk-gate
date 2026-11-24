@@ -215,13 +215,16 @@ class CliTests(unittest.TestCase):
                 "--policy", policy or self.policy,
                 "--rating", rating_path or self.write("rating.json", rating("low", "high"))]
 
-    def run_gate(self, reviews_out, pr=None, head_prs=None, commit=None, perms=None, rating_data=None, activity=None):
+    def run_gate(self, reviews_out, pr=None, head_prs=None, commit=None, perms=None, rating_data=None, activity=None,
+                 extra=(), post_fails=False):
         """-> (exit code, stdout, gh calls).
         Calls: PR, PRs on the head commit, reviews, head commit, one permission per candidate, check POST.
         perms maps login -> permission (default write); the value "error" makes that lookup fail."""
         def route(cmd):
             path = cmd[-1]
             if "POST" in cmd:
+                if post_fails:
+                    raise subprocess.CalledProcessError(1, cmd, stderr="HTTP 502")
                 return "{}"
             if "/collaborators/" in path:
                 permission = (perms or {}).get(path.split("/")[-2], "write")
@@ -240,7 +243,7 @@ class CliTests(unittest.TestCase):
                 return json.dumps(head_prs or [pull()])
             return json.dumps(pr or pull())
         rating_path = self.write("rating.json", rating_data) if rating_data else None
-        return self.run_main(self.run_argv(rating_path=rating_path), route)
+        return self.run_main(self.run_argv(rating_path=rating_path) + list(extra), route)
 
     def test_run_verdict_and_approvals_per_tier(self):
         reviews = [review("bob", "APPROVED"), review("carol", "APPROVED")]
@@ -375,6 +378,29 @@ class CliTests(unittest.TestCase):
                 self.assertEqual((body["head_sha"], body["conclusion"]), (HEAD, "failure"))
                 self.assertIn(reason, body["output"]["summary"])
                 self.assertNotIn("text", body["output"])
+
+    def test_verdict_posted_file_only_after_the_verdict_is_posted(self):
+        # The workflow's failure step skips when this file exists, so a failing verdict is not overwritten.
+        approved = json.dumps([review("bob", "APPROVED"), review("carol", "APPROVED")])
+        cases = (  # (gate kwargs, exit code, file content or None)
+            ({"reviews_out": approved}, 0, "success\n"),
+            ({"reviews_out": "[]"}, 1, "failure\n"),
+            ({"reviews_out": "[]", "pr": pull(base="release")}, 1, None),  # gate error check, not a verdict
+            ({"reviews_out": "not json"}, 1, None),
+            ({"reviews_out": approved, "post_fails": True}, 1, None),  # the verdict POST itself failed
+        )
+        for kwargs, want, content in cases:
+            with self.subTest(kwargs=kwargs):
+                path = os.path.join(self.dir.name, "verdict-posted")
+                if os.path.exists(path):
+                    os.remove(path)
+                code, _, _ = self.run_gate(**kwargs, extra=["--verdict-posted", path])
+                self.assertEqual(code, want)
+                if content is None:
+                    self.assertFalse(os.path.exists(path))
+                else:
+                    with open(path, encoding="utf-8") as f:
+                        self.assertEqual(f.read(), content)
 
     def test_run_error_posts_failure_check_and_swallows_post_error(self):
         argv = self.run_argv()

@@ -16,7 +16,7 @@ Status: PASS, FIXED (was failing, fixed on this branch), OPEN (needs a live run 
 
 | # | Criterion (expected behaviour) | Status | Evidence or blocker |
 |---|---|---|---|
-| 1 | Unit tests pass: `python -m unittest discover -s tests -v` | PASS | 67 tests OK on Python 3.11, 3.12, 3.13, from a fresh clone of the branch. Baseline was 54. |
+| 1 | Unit tests pass: `python -m unittest discover -s tests -v` | PASS | 68 tests OK on Python 3.11, 3.12, 3.13, from a fresh clone of the branch. Baseline was 54. |
 | 2 | Lint: ruff, `py_compile`, shellcheck `--severity=style` | PASS | ruff 0.16.9 (CI pin) clean; shellcheck clean; compile OK |
 | 3 | Workflow security: zizmor 1.30.1 `--min-severity medium`, no `github.event` interpolation in `run:` | PASS | 0 findings over `.github` and both examples (offline mode locally; CI runs online). CI now audits the examples too. |
 | 4 | Secret scan: gitleaks over full history | PASS (CI) | Green on `main` at `bcf8b55`; rerun by CI on the release PR |
@@ -26,8 +26,9 @@ Status: PASS, FIXED (was failing, fixed on this branch), OPEN (needs a live run 
 | 8 | `gate.py run` / `rating-cache get` through a real `gh` subprocess | PASS (mocked gh) | Fake `gh` on PATH: medium, 0 approvals -> failure check, exit 1; 1 write-access approval -> success, exit 0; cache returns the posted marker for the App's ID and nothing for another App ID |
 | 9 | Documented tiers hold under the documented setup: low needs 0 humans | FIXED (docs), OPEN (live) | `CODEOWNERS.example` had a catch-all `*` owner and README told users to enable "Require review from Code Owners" and "Require approval of the most recent reviewable push". GitHub documents both as requiring an approval, so low-risk PRs could not merge without a human. Removed the `*` owner, set last-push approval to off with the reason. A ruleset cannot scope that setting per tier, so the gate now enforces it itself (row 15). Needs one live low-tier merge under the full ruleset. |
 | 10 | SPEC matches the code | FIXED | `--base-ref` and the base check, `author_association` in rule 7, `failure() || cancelled()`, Metadata read permission, and the out-of-scope line that contradicted rule 11. |
-| 11 | End to end on the test repo: trigger, caller, gate, App check | PASS (live, earlier) | PR #36 on the test repo (README Test status). Re-test with the release SHA: OPEN |
-| 12 | Medium passes with 1 approval, high with 2 | OPEN | Needs a second collaborator on the test repo |
+| 11 | End to end on the test repo: trigger, caller, gate, App check | PASS (live) | Release candidate `f0a7f15`: low-tier PR #40 posted success 0/0; medium PR #41 posted failure 0/1 with AI PASS; `.github` PR #39 rated high. Re-run at the final SHA after the row 17 fix. |
+| 17 | A failing verdict stays the newest check (the failure step does not post over it) | FIXED (unit), OPEN (live re-run) | Live on PR #41: the failure step listed check runs 20 ms after the verdict POST, did not see it, and posted `pr-risk-gate: error` over it, dropping the reason and the cache marker. Now `gate.py run --verdict-posted` writes a file after the verdict POST and the step skips on it. Regression `test_verdict_posted_file_only_after_the_verdict_is_posted`. |
+| 12 | Medium passes with 1 approval, high with 2 | OPEN (deferred) | Needs a second account; Dusty has one account only. Unit tests cover the counting. |
 | 13 | Non-default base fails; fork PR fails; shared head commit fails | PASS (unit), OPEN (live) | Unit tests cover the gate logic; live runs not done |
 | 14 | Cancelled or failed run leaves a failing check | OPEN | Workflow step present; not run live |
 | 15 | The person who pushed the head commit cannot approve it (GitHub's last-push rule, per tier) | FIXED (unit), OPEN (live) | Was a README known limit: the gate excluded only commit author and committer, which the pusher sets. `gate.py` now reads the pusher from `repos/R/activity` and excludes them; unknown pusher -> no approval counts. 3 new tests. The endpoint returned the real pusher on this repo with a user token; needs a live run with the App token. |

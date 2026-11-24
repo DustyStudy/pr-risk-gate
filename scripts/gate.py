@@ -253,6 +253,11 @@ def cmd_run(args):
         passed, final, required = decide(rating, len(approvers), policy)
         payload = build_check_payload(policy, args.pr, args.head_sha, rating, approvers, passed, final, required, notes)
         gh_api(["-X", "POST", f"repos/{args.repo}/check-runs", "--input", "-"], body=json.dumps(payload))
+        if args.verdict_posted:
+            # Tells the workflow's failure step that a verdict stands on this SHA, so it must not post over it.
+            # Listing check runs right after the POST is not reliable: the new run can be missing for a moment.
+            with open(args.verdict_posted, "w", encoding="utf-8") as f:
+                f.write(payload["conclusion"] + "\n")
     # Fail closed on any error, known or not: an uncaught one would skip the failure check below
     # and leave an earlier success standing on this SHA. Logged to stderr and posted, never silent.
     except Exception as e:  # noqa: BLE001
@@ -302,6 +307,7 @@ def main(argv=None):
     run.add_argument("--base-ref", required=True)
     run.add_argument("--policy", required=True)
     run.add_argument("--rating", required=True)
+    run.add_argument("--verdict-posted", help="file written once the verdict check is posted")
     run.set_defaults(func=cmd_run)
 
     args = parser.parse_args(argv)

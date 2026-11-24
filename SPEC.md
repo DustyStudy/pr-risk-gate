@@ -90,7 +90,7 @@ Subcommands:
    - Fetches all reviews (`--paginate`), applies rule 7, and counts distinct approvers. The pusher lookup (`repos/R/activity?ref=refs/heads/<head ref>`) runs only when a candidate approver remains; an unknown pusher adds a note to the summary.
    - `final = max_rank(deterministic.risk, ai.risk)`, `required = policy.approvals[final]` (low 0, medium 1, high 2). Passes iff `ai.verdict == "PASS"` AND `len(approvers) >= required`. Any other verdict value counts as CHANGES.
    - Posts a completed check run as the App: `name=policy.check_name`, `head_sha`, `conclusion=success|failure`, `output.title`, `output.summary` (final risk, required vs. have, reasons, approver logins; reasons and logins rendered inert and capped), and `output.text` = the marker with rating and `pr`.
-   - Exit 0 on pass, 1 on fail.
+   - Exit 0 on pass, 1 on fail. With `--verdict-posted FILE`, writes the conclusion to FILE only after the verdict check is posted, so the workflow's failure step does not post over it (listing check runs right after the POST can miss the new run).
    - On any error after the PR is identified: print the cause to stderr, post a failing check on the same SHA with no marker (best effort, errors ignored), exit 1. If the check name cannot be read from the policy, use the default `pr-risk-gate`.
    - Auth: `GH_TOKEN` env var (the App installation token), used by `gh`.
 
@@ -121,7 +121,7 @@ Steps:
 6. Reuse the cached rating: `gate.py rating-cache get --app-id`. If none, run `risk.py` on `base...head` (from `target/`), then `ai_rate.sh` with the Anthropic key only in that step. Diff produced with `git -c core.quotePath=false -C target diff --no-ext-diff --no-textconv --text`. Install Claude Code via npm with `--ignore-scripts`, version 2.1.317, only when this step runs.
 7. Combine into `rating.json` with jq.
 8. `gate.py run` with the App token and the app ID.
-9. `if: failure() || cancelled()` step: post a failing check as the App unless the App's newest check on the SHA already fails.
+9. `if: (failure() || cancelled()) && steps.verdict.outputs.posted != 'true'` step: post a failing check as the App unless the App's newest check on the SHA already fails. Step 8 sets `posted` from `--verdict-posted`.
 
 ## Out of scope for v1
 

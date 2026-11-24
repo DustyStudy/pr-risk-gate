@@ -67,10 +67,12 @@ Live-tested on the test repo `DustyStudy/factory-test-target`, which is public, 
 
 | What | Result |
 |---|---|
-| Unit tests (67) and CI on the gate repo (lint, gitleaks, zizmor) | Pass on every merged gate PR |
+| Unit tests (68) and CI on the gate repo (lint, gitleaks, zizmor) | Pass on every merged gate PR |
 | Trigger, caller, gate and App check, end to end | Pass: PR #36 (low tier) posted `pr-risk-gate` success as the App |
 | Environment secrets reach the reusable gate (App key and Anthropic key), with no repository-level copies | Pass: PR #36 mint and AI rating both succeeded |
 | High tier with AI review CHANGES | Fail as designed: PR #37 (dependency pin), 0 of 2 approvals |
+| Release candidate, low tier (docs only) | Pass: PR #40 posted success, 0 of 0 approvals |
+| Release candidate, medium tier with AI PASS and 0 approvals | Fail as designed: PR #41, 0 of 1 approvals. This run found the failure step posting a generic error over the verdict (a listing race), fixed with `--verdict-posted` |
 | Medium tier with AI PASS and 0 approvals (solo mode, since replaced) | Pass: PR #38. Current policy needs 1 human approval for medium, so this result no longer applies |
 
 **Not tested live:**
