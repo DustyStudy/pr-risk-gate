@@ -2,7 +2,7 @@
 
 Goal: rate each PR's merge risk, then require a number of human approvals that depends on that risk. Low-risk PRs need 0 human approvals, medium 1, high 2. Every tier also requires the AI review verdict to be PASS (one Claude call returns both risk and verdict). The ruleset's native required-approvals count is 0, so the gate enforces the counts. The gate posts a required status check named `pr-risk-gate` through a dedicated GitHub App, so no PR, workflow or personal token can post it.
 
-This file is kept in step with the code. Where it and the code disagree, fix the one that is wrong and say so.
+Test status: see README.md ("Test status"). This file is kept in step with the code. Where it and the code disagree, fix the one that is wrong and say so.
 
 ## Design in one paragraph
 

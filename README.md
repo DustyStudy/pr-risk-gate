@@ -50,7 +50,7 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 
 ## Known limits
 
-- **Not yet run on GitHub.** The workflows and the App flow are unverified until a live run. Test on a throwaway target repo first. The assumptions to check first: `workflow_run.pull_requests` is filled for review-triggered runs, and `job.workflow_sha` resolves inside the called workflow.
+- **Partly tested.** The main path runs live on the test repo (see Test status). Not yet confirmed: review-triggered runs (no review was submitted in testing), and everything listed as not tested there.
 - **A PR can edit its own review trigger.** `pull_request_review` runs the PR's copy of the trigger file, and there is no `pull_request_review_target`. A PR that removes that trigger keeps its earlier check result until its next push. CODEOWNERS on `.github/workflows/` and "Require review from Code Owners" on the ruleset make that edit visible and need security approval before merge.
 - **A failed mint leaves the earlier result standing.** If the App token cannot be minted (App outage, rotated key, wrong App ID), no failing check can be posted, and an older success on the SHA stays. Watch for `pr-risk-gate` runs that fail at the mint step.
 - **A pusher can approve their own commit.** The commit API reports the commit's author and committer, which the pusher can set to someone else. It does not say who pushed. Closing this needs another source for the pusher.
@@ -60,6 +60,27 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 - **Dependabot PRs.** It is not known whether a Dependabot run can read the App key. If it cannot, its check fails at the mint step, which is fail-closed. Verify this on a live run.
 - **Environments need a plan.** Environments with branch rules on private repos require a paid GitHub plan.
 - **Gate repo visibility.** The caller checks this repo out with the default token, so this repo must be public, the same as issue-factory.
+
+## Test status
+
+Live-tested on the test repo `DustyStudy/factory-test-target`, which is public, with the gate at the commits listed. Re-test after any change to the gate, the policy, or the caller.
+
+| What | Result |
+|---|---|
+| Unit tests (54) and CI on the gate repo (lint, gitleaks, zizmor) | Pass on every merged gate PR |
+| Trigger, caller, gate and App check, end to end | Pass: PR #36 (low tier) posted `pr-risk-gate` success as the App |
+| Environment secrets reach the reusable gate (App key and Anthropic key), with no repository-level copies | Pass: PR #36 mint and AI rating both succeeded |
+| High tier with AI review CHANGES | Fail as designed: PR #37 (dependency pin), 0 of 2 approvals |
+| Medium tier with AI PASS and 0 approvals (solo mode, since replaced) | Pass: PR #38. Current policy needs 1 human approval for medium, so this result no longer applies |
+
+**Not tested live:**
+- A PR approved by a second person: medium passing with 1 approval, and high passing with 2. Needs a second collaborator.
+- A PR into a non-default base (should fail), and a fork PR (should fail).
+- A cancelled or failed run leaving a failing check rather than an earlier success.
+- The shared-commit refusal (two open PRs with the same head commit).
+- A mint failure, which posts nothing (see Known limits).
+- A PR that drops its review trigger, and a retarget that re-runs the gate.
+- Rotating the App key.
 
 ## Setup
 
