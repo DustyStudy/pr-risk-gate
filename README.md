@@ -2,13 +2,13 @@
 
 A merge gate that rates each pull request's risk and sets how many human approvals it needs.
 
-Tiers follow Anthropic's own review model:
+| Risk tier | Human approvals | Typical change or additional requirement |
+|---|---:|---|
+| Low | 0 | Small changes such as a typo or lint fix |
+| Medium | 1 | Most changes |
+| High | 2 | Requires CODEOWNERS sign-off on security-owned paths |
 
-- **Low** risk (smaller changes, like a typo or lint fix): no human approval. The AI review must return PASS.
-- **Medium** risk (most changes): 1 human approval, plus the AI review PASS.
-- **High** risk (riskiest changes): 2 human approvals, plus the AI review PASS and CODEOWNERS sign-off on security-owned paths.
-
-Every tier also requires the AI review verdict PASS. The review is one Claude call per PR, with no tools, that judges correctness and security as well as risk.
+Every tier requires an AI review verdict of PASS. The review is one Claude call per PR, with no tools, that judges correctness and security as well as risk.
 
 Because low-risk changes need no human, the ruleset's native "required approving reviews" must be **0**. The gate enforces the counts, not GitHub.
 
