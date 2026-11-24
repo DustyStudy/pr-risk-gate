@@ -24,7 +24,12 @@ def review(login, state, commit=HEAD, at="2026-01-01T00:00:00Z", type="User", as
 
 
 def pull(sha=HEAD, state="open", login="alice", number=7, base="main"):
-    return {"number": number, "state": state, "head": {"sha": sha}, "user": {"login": login}, "base": {"ref": base}}
+    return {"number": number, "state": state, "head": {"sha": sha, "ref": "feature"}, "user": {"login": login},
+            "base": {"ref": base}}
+
+
+def push(login="alice", after=HEAD, kind="push"):
+    return {"activity_type": kind, "ref": "refs/heads/feature", "after": after, "actor": {"login": login}}
 
 
 def rating(det="low", ai="low", verdict="PASS"):
@@ -210,13 +215,16 @@ class CliTests(unittest.TestCase):
                 "--policy", policy or self.policy,
                 "--rating", rating_path or self.write("rating.json", rating("low", "high"))]
 
-    def run_gate(self, reviews_out, pr=None, head_prs=None, commit=None, perms=None, rating_data=None):
+    def run_gate(self, reviews_out, pr=None, head_prs=None, commit=None, perms=None, rating_data=None, activity=None,
+                 extra=(), post_fails=False):
         """-> (exit code, stdout, gh calls).
         Calls: PR, PRs on the head commit, reviews, head commit, one permission per candidate, check POST.
         perms maps login -> permission (default write); the value "error" makes that lookup fail."""
         def route(cmd):
             path = cmd[-1]
             if "POST" in cmd:
+                if post_fails:
+                    raise subprocess.CalledProcessError(1, cmd, stderr="HTTP 502")
                 return "{}"
             if "/collaborators/" in path:
                 permission = (perms or {}).get(path.split("/")[-2], "write")
@@ -225,13 +233,17 @@ class CliTests(unittest.TestCase):
                 return json.dumps({"permission": permission})
             if "/reviews" in path:
                 return reviews_out
+            if "/activity?" in path:
+                if activity == "error":
+                    raise subprocess.CalledProcessError(1, cmd, stderr="HTTP 403")
+                return activity if isinstance(activity, str) else json.dumps([push()] if activity is None else activity)
             if path.endswith(f"commits/{HEAD}"):
                 return json.dumps(commit or {"author": {"login": "alice"}, "committer": {"login": "web-flow"}})
             if f"commits/{HEAD}/pulls" in path:
                 return json.dumps(head_prs or [pull()])
             return json.dumps(pr or pull())
         rating_path = self.write("rating.json", rating_data) if rating_data else None
-        return self.run_main(self.run_argv(rating_path=rating_path), route)
+        return self.run_main(self.run_argv(rating_path=rating_path) + list(extra), route)
 
     def test_run_verdict_and_approvals_per_tier(self):
         reviews = [review("bob", "APPROVED"), review("carol", "APPROVED")]
@@ -263,7 +275,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(calls[0][0][2:], ["repos/o/r/pulls/7"])  # the PR is fetched before anything else
         self.assertIn(f"repos/o/r/commits/{HEAD}/pulls", calls[1][0][-1])
-        self.assertEqual([c[0][-1] for c in calls[3:6]], [f"repos/o/r/commits/{HEAD}"] + [
+        self.assertEqual([c[0][-1] for c in calls[3:7]], [
+            f"repos/o/r/commits/{HEAD}", "repos/o/r/activity?ref=refs%2Fheads%2Ffeature&per_page=100"] + [
             f"repos/o/r/collaborators/{u}/permission" for u in ("bob", "carol")])
         cmd, body = calls[-1]
         self.assertEqual(cmd[:4], ["gh", "api", "-X", "POST"])
@@ -289,6 +302,43 @@ class CliTests(unittest.TestCase):
                 self.assertIn("1 of 2", json.loads(calls[-1][1])["output"]["summary"])
                 self.assertFalse(any("collaborators/bob/" in c[0][-1] for c in calls))
 
+    def test_run_excludes_the_pusher_of_the_head_commit(self):
+        both = json.dumps([review("bob", "APPROVED"), review("carol", "APPROVED")])
+        # bob pushed the head commit (author and committer say alice): his approval does not count.
+        for activity in ([push("Bob")], [push("bob", kind="force_push"), push("carol", after=OLD)],
+                         [push("bob", kind="branch_creation")], [push("dave"), push("bob")]):
+            with self.subTest(activity=activity):
+                code, _, calls = self.run_gate(both, activity=activity)
+                self.assertEqual(code, 1)
+                self.assertIn("1 of 2", json.loads(calls[-1][1])["output"]["summary"])
+                self.assertFalse(any("collaborators/bob/" in c[0][-1] for c in calls))
+        # An older push by carol does not matter; only the push that set the head commit does.
+        self.assertEqual(self.run_gate(both, activity=[push("dave"), push("carol", after=OLD)])[0], 0)
+
+    def test_run_unknown_pusher_counts_no_approval(self):
+        both = json.dumps([review("bob", "APPROVED"), review("carol", "APPROVED")])
+        no_actor = [{"activity_type": "push", "after": HEAD, "actor": None}]
+        for activity in ([], [push(after=OLD)], no_actor, "error", "not json", json.dumps({"message": "x"})):
+            with self.subTest(activity=activity):
+                code, _, calls = self.run_gate(both, activity=activity)
+                body = json.loads(calls[-1][1])
+                self.assertEqual((code, body["conclusion"]), (1, "failure"))
+                self.assertIn("0 of 2", body["output"]["summary"])
+                self.assertIn("pusher of the head commit is unknown", body["output"]["summary"])
+                self.assertIn("text", body["output"])  # a normal verdict with its marker, not a gate error
+        # Low risk needs no human, so an unknown pusher does not block it.
+        code, _, _ = self.run_gate(both, activity="error", rating_data=rating("low", "low"))
+        self.assertEqual(code, 0)
+        # No head ref on the PR: unknown pusher too.
+        pr = pull()
+        del pr["head"]["ref"]
+        self.assertEqual(self.run_gate(both, pr=pr)[0], 1)
+
+    def test_head_pushers(self):
+        self.assertEqual(gate.head_pushers([push("Bob"), push("carol", after=OLD)], HEAD), {"bob"})
+        self.assertIsNone(gate.head_pushers([push("carol", after=OLD)], HEAD))
+        self.assertIsNone(gate.head_pushers([push("bob"), {"after": HEAD}], HEAD))
+
     def test_run_counts_only_write_access(self):
         both = json.dumps([review("bob", "APPROVED"), review("carol", "APPROVED")])
         for permission in ("read", "triage", "none", "error"):
@@ -306,7 +356,8 @@ class CliTests(unittest.TestCase):
         both = json.dumps([review("alice", "APPROVED"), review("bob", "APPROVED")])
         # alice wrote the PR: her approval does not count, so high risk (2 required) fails.
         self.assertEqual(self.run_gate(both)[0], 1)
-        self.assertEqual(self.run_gate(both, pr=pull(login="carol"), commit={"author": {"login": "carol"}})[0], 0)
+        self.assertEqual(self.run_gate(both, pr=pull(login="carol"), commit={"author": {"login": "carol"}},
+                                       activity=[push("carol")])[0], 0)
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             gate.main(self.run_argv() + ["--author", "carol"])  # the flag is gone
 
@@ -327,6 +378,29 @@ class CliTests(unittest.TestCase):
                 self.assertEqual((body["head_sha"], body["conclusion"]), (HEAD, "failure"))
                 self.assertIn(reason, body["output"]["summary"])
                 self.assertNotIn("text", body["output"])
+
+    def test_verdict_posted_file_only_after_the_verdict_is_posted(self):
+        # The workflow's failure step skips when this file exists, so a failing verdict is not overwritten.
+        approved = json.dumps([review("bob", "APPROVED"), review("carol", "APPROVED")])
+        cases = (  # (gate kwargs, exit code, file content or None)
+            ({"reviews_out": approved}, 0, "success\n"),
+            ({"reviews_out": "[]"}, 1, "failure\n"),
+            ({"reviews_out": "[]", "pr": pull(base="release")}, 1, None),  # gate error check, not a verdict
+            ({"reviews_out": "not json"}, 1, None),
+            ({"reviews_out": approved, "post_fails": True}, 1, None),  # the verdict POST itself failed
+        )
+        for kwargs, want, content in cases:
+            with self.subTest(kwargs=kwargs):
+                path = os.path.join(self.dir.name, "verdict-posted")
+                if os.path.exists(path):
+                    os.remove(path)
+                code, _, _ = self.run_gate(**kwargs, extra=["--verdict-posted", path])
+                self.assertEqual(code, want)
+                if content is None:
+                    self.assertFalse(os.path.exists(path))
+                else:
+                    with open(path, encoding="utf-8") as f:
+                        self.assertEqual(f.read(), content)
 
     def test_run_error_posts_failure_check_and_swallows_post_error(self):
         argv = self.run_argv()

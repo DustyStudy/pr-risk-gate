@@ -41,7 +41,7 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 - **PR code never runs in a trusted job.** The trigger job has no checkout, and the gate checks out the PR only to read git objects.
 - **The AI can only raise risk.** Final risk is the higher of the rule result and the AI result. An AI error, timeout, oversized diff, or unparseable reply counts as high.
 - **Prompt injection is contained, not solved.** The diff is untrusted. The model has no tools and runs with `--bare`, and its reply is parsed strictly. A hostile diff can at most make the model say "low", and the rules still apply.
-- **Approvals count only from people with write access.** An approval counts only if it is the reviewer's latest submitted review, is on the current head commit, is not from the PR author or the head commit's author or committer, is not from a bot, and comes from a user whose repository permission is admin, maintain or write.
+- **Approvals count only from people with write access.** An approval counts only if it is the reviewer's latest submitted review, is on the current head commit, is not from the PR author, the head commit's author or committer, or whoever pushed the head commit, is not from a bot, and comes from a user whose repository permission is admin, maintain or write.
 - **A reply in a review thread counts as a new review.** GitHub records a comment reply as a COMMENTED review, so a reviewer who approves and then replies "thanks" loses the approval until they approve again. This is stricter than GitHub's own branch protection, on purpose.
 - **Fail closed.** A rule error posts a failing check. A missing API key rates the PR high.
 - **Same-repository PRs only, into the default branch only.** Fork PRs are refused, and so are runs with no PR attached and PRs into other branches.
@@ -53,7 +53,7 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 - **Partly tested.** The main path runs live on the test repo (see Test status). Not yet confirmed: review-triggered runs (no review was submitted in testing), and everything listed as not tested there.
 - **A PR can edit its own review trigger.** `pull_request_review` runs the PR's copy of the trigger file, and there is no `pull_request_review_target`. A PR that removes that trigger keeps its earlier check result until its next push. CODEOWNERS on `.github/workflows/` and "Require review from Code Owners" on the ruleset make that edit visible and need security approval before merge.
 - **A failed mint leaves the earlier result standing.** If the App token cannot be minted (App outage, rotated key, wrong App ID), no failing check can be posted, and an older success on the SHA stays. Watch for `pr-risk-gate` runs that fail at the mint step.
-- **A pusher can approve their own commit.** The commit API reports the commit's author and committer, which the pusher can set to someone else. It does not say who pushed. Closing this needs another source for the pusher.
+- **The pusher comes from the repository activity log.** The gate excludes whoever moved the PR branch to the head commit (`repos/R/activity`), since commit author and committer are set by the pusher. If no activity entry names the push (lookup error, or the log lags just after a push), no approval counts: medium and high fail until the next review event re-runs the gate, and low is unaffected.
 - **The App key is the root of trust.** Anyone with admin on the target repo can read environment secrets. Rotate the App key in GitHub and in the environment if it leaks.
 - **Workflows that run in the trusted context stay trusted.** Protect the default branch: changes to the trigger, the caller or the gate must go through reviewed merges.
 - **Rating re-rolls.** A marker-less failure as the newest App check forces a fresh AI rating. The deterministic floor still applies.
@@ -67,10 +67,12 @@ Live-tested on the test repo `DustyStudy/factory-test-target`, which is public, 
 
 | What | Result |
 |---|---|
-| Unit tests (54) and CI on the gate repo (lint, gitleaks, zizmor) | Pass on every merged gate PR |
+| Unit tests (68) and CI on the gate repo (lint, gitleaks, zizmor) | Pass on every merged gate PR |
 | Trigger, caller, gate and App check, end to end | Pass: PR #36 (low tier) posted `pr-risk-gate` success as the App |
 | Environment secrets reach the reusable gate (App key and Anthropic key), with no repository-level copies | Pass: PR #36 mint and AI rating both succeeded |
 | High tier with AI review CHANGES | Fail as designed: PR #37 (dependency pin), 0 of 2 approvals |
+| Release candidate, low tier (docs only) | Pass: PR #40 posted success, 0 of 0 approvals, at `f0a7f15` and again at `20f232f` |
+| Release candidate, medium tier with AI PASS and 0 approvals | Fail as designed: PR #41, 0 of 1 approvals. The first run found the failure step posting a generic error over the verdict (a listing race). Fixed with `--verdict-posted`; the re-run at the fix kept the verdict newest |
 | Medium tier with AI PASS and 0 approvals (solo mode, since replaced) | Pass: PR #38. Current policy needs 1 human approval for medium, so this result no longer applies |
 
 **Not tested live:**
@@ -81,6 +83,8 @@ Live-tested on the test repo `DustyStudy/factory-test-target`, which is public, 
 - A mint failure, which posts nothing (see Known limits).
 - A PR that drops its review trigger, and a retarget that re-runs the gate.
 - Rotating the App key.
+- A low-risk PR merging with 0 approvals under the full ruleset from Setup step 6 (code owners on security paths only, last-push approval off).
+- The pusher lookup with the App's token (`repos/R/activity`, Metadata read), and an approval by the person who pushed the head commit not counting.
 
 ## Setup
 
@@ -91,14 +95,14 @@ Live-tested on the test repo `DustyStudy/factory-test-target`, which is public, 
 4. **Copy the workflows** to the target repo's default branch:
    - `examples/pr-trigger.yml` as `.github/workflows/pr-trigger.yml`.
    - `examples/caller.yml` as `.github/workflows/pr-risk-gate.yml`. Replace the placeholder SHA with the full commit SHA of the gate release you have reviewed.
-5. **Add CODEOWNERS.** Copy `CODEOWNERS.example` to `.github/CODEOWNERS` and fill in the owners.
+5. **Add CODEOWNERS.** Copy `CODEOWNERS.example` to `.github/CODEOWNERS` and fill in the owners. List only security-owned paths. A catch-all `*` owner makes every PR need a code owner's approval, so low-risk PRs could no longer merge without a human.
 6. **Add a branch ruleset** on the default branch:
    - Require status check `pr-risk-gate`, with its source pinned to the App.
    - Require your existing CI checks too. The gate does not replace tests.
    - Require approving reviews: **0**. The gate sets the human count per tier (0, 1 or 2).
    - Require review from Code Owners.
    - Dismiss stale approvals on new pushes.
-   - Require approval of the most recent reviewable push.
+   - Leave "Require approval of the most recent reviewable push" **off**. GitHub documents it as requiring someone other than the last pusher to approve, so it would give low-risk PRs a human requirement, and a ruleset cannot scope it by risk tier (rulesets target branches, and bypass lists name actors, not PRs). The gate enforces the same rule on the tiers that need humans: an approval counts only on the head commit and never from the person who pushed it.
    - Block bypass for everyone, including admins.
 
 ## Tests

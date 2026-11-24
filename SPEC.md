@@ -16,8 +16,8 @@ A `pull_request` trigger workflow in the target repo does nothing and has no sec
 4. The diff is untrusted data. The model gets no tools (`--tools ""`), `--bare`, and its output is parsed strictly. Never execute PR code. The gate runs no code from the PR checkout; it only reads git objects.
 5. Never print secret values. Secret scan reports file and line only.
 6. Only same-repository PRs into the default branch are rated. A run whose head repository differs from the base repository, that has no PR attached, or whose PR targets another branch, posts a failing check (App-posted) and stops.
-7. An approval counts only if: the user's LATEST submitted review is APPROVED (PENDING reviews are ignored; COMMENTED and DISMISSED replace an earlier approval), its `commit_id` equals the PR head SHA, the user is not the PR author and not the head commit's author or committer, the user's `user.type` is not Bot, and the user's repository permission (`repos/R/collaborators/LOGIN/permission`) is admin, maintain or write. A failed permission lookup means that user does not count.
-8. If the gate errors after it has identified the PR, it posts a failing check on the head SHA (best effort) so an earlier success does not stand. The job's `failure()` step does the same when the job fails before a verdict.
+7. An approval counts only if: the user's LATEST submitted review is APPROVED (PENDING reviews are ignored; COMMENTED and DISMISSED replace an earlier approval), its `commit_id` equals the PR head SHA, the user is not the PR author, not the head commit's author or committer, and not an actor of a `repos/R/activity` entry on the PR's head branch whose `after` is the head SHA (the pusher; if no such entry is found or the lookup fails, no approval counts), the user's `user.type` is not Bot, the review's `author_association` is OWNER, MEMBER or COLLABORATOR, and the user's repository permission (`repos/R/collaborators/LOGIN/permission`) is admin, maintain or write. A failed permission lookup means that user does not count.
+8. If the gate errors after it has identified the PR, it posts a failing check on the head SHA (best effort) so an earlier success does not stand. The job's `failure() || cancelled()` step does the same when the job fails or is cancelled before a verdict.
 9. Only the App posts the check. The cache trusts only check runs whose `app.id` equals the configured App ID. A commit that is the head of more than one open PR gets a failing check (fail closed), so a success on a shared commit cannot satisfy a second PR.
 10. Secrets: the App private key and the Anthropic key live ONLY in the GitHub environment `pr-risk-gate`, whose deployment branch rule allows only the default branch. Never repository secrets: a branch workflow could read those. The trigger workflow has no secrets and no checkout.
 11. Only the PR's default-branch target is rated. A PR whose base is another branch fails its check. The trigger uses `pull_request_target`, so the trigger file is the default branch's copy and a PR cannot change it for its own events. `pull_request_review` runs the PR's copy; a PR that edits its trigger there is caught by CODEOWNERS on `.github/workflows/` (README "Known limits").
@@ -34,7 +34,7 @@ scripts/risk.py                      deterministic risk (CLI + pure functions)
 scripts/gate.py                      approvals, App-only cache, shared-commit check, check run
 scripts/ai_rate.sh                   calls Claude once, prints rating JSON
 scripts/json_field.py                copied unchanged from DustyStudy/issue-factory
-tests/test_risk.py, tests/test_gate.py
+tests/test_risk.py, tests/test_gate.py, tests/test_ai_rate.py
 .github/workflows/pr-gate.yml        reusable gate (workflow_call), runs in workflow_run context
 .github/workflows/ci.yml             this repo's own CI
 examples/pr-trigger.yml              the no-secret pull_request trigger a target repo copies
@@ -68,7 +68,7 @@ CLI: `python3 scripts/risk.py --policy POLICY.json --base BASE_SHA --head HEAD_S
 Env in: `DIFF_FILE`, `RISK_MODEL` (default `claude-sonnet-5-5`), `RISK_EFFORT` (default `medium`), `RISK_BUDGET` (default `0.25`). The prompt is `prompts/risk.md`, resolved from the script's own directory.
 - Missing diff file -> high. Diff over 60000 bytes -> high, model not called. No `ANTHROPIC_API_KEY` -> high, "AI rating disabled (no key)".
 - Calls: `env -u GH_TOKEN claude -p "$(cat prompts/risk.md)" --bare --model "$RISK_MODEL" --effort "$RISK_EFFORT" --tools "" --max-turns 2 --max-budget-usd "$RISK_BUDGET" --output-format json < "$DIFF_FILE"`. Its exit status is captured; any nonzero -> high, even with output.
-- Output validated with `json_field.py` and jq. Prints exactly one JSON line `{"risk","verdict","reason"}`, where `verdict` is `PASS` or `CHANGES`. Every fallback prints `risk: high, verdict: CHANGES`. Always exit 0.
+- Output validated with `json_field.py` and jq. Prints exactly one JSON line `{"risk","verdict","reason"}`, where `verdict` is `PASS` or `CHANGES`. Every fallback prints `risk: high, verdict: CHANGES`. Always exit 0, including when temp-dir cleanup fails.
 
 ### prompts/risk.md
 
@@ -83,18 +83,18 @@ Subcommands:
    - Reads the marker `<!-- pr-risk-gate-rating: {...} -->` from that run's `output.text`. The marker holds the rating plus `"pr": N`.
    - Prints the rating JSON (`{"deterministic","ai"}`, without `pr`) only if the marker's `pr` equals `--pr`. Otherwise prints nothing. Exit 0 except on argument errors.
 
-2. `python3 scripts/gate.py run --repo OWNER/REPO --pr N --head-sha SHA --app-id ID --policy POLICY.json --rating RATING.json`
+2. `python3 scripts/gate.py run --repo OWNER/REPO --pr N --head-sha SHA --app-id ID --base-ref BRANCH --policy POLICY.json --rating RATING.json`
    - `RATING.json` = `{"deterministic": <risk.py output>, "ai": <ai_rate.sh output>}`. Unknown risk values or missing keys -> failure.
-   - Fetches the PR (`repos/R/pulls/N`): author login, head SHA and state. If the PR head SHA is not `--head-sha`, or the PR is not open, -> failure ("PR moved or closed").
+   - Fetches the PR (`repos/R/pulls/N`): author login, head SHA, state and base ref. If the PR head SHA is not `--head-sha`, or the PR is not open, -> failure ("PR moved or closed"). If the base ref is not `--base-ref` (the default branch) -> failure ("PR targets X, not the default branch").
    - Shared-commit check: lists open PRs whose head is `--head-sha` (`repos/R/commits/SHA/pulls`). More than one -> failure ("commit is the head of N open PRs").
-   - Fetches all reviews (`--paginate`), applies rule 7, and counts distinct approvers.
+   - Fetches all reviews (`--paginate`), applies rule 7, and counts distinct approvers. The pusher lookup (`repos/R/activity?ref=refs/heads/<head ref>`) runs only when a candidate approver remains; an unknown pusher adds a note to the summary.
    - `final = max_rank(deterministic.risk, ai.risk)`, `required = policy.approvals[final]` (low 0, medium 1, high 2). Passes iff `ai.verdict == "PASS"` AND `len(approvers) >= required`. Any other verdict value counts as CHANGES.
    - Posts a completed check run as the App: `name=policy.check_name`, `head_sha`, `conclusion=success|failure`, `output.title`, `output.summary` (final risk, required vs. have, reasons, approver logins; reasons and logins rendered inert and capped), and `output.text` = the marker with rating and `pr`.
-   - Exit 0 on pass, 1 on fail.
+   - Exit 0 on pass, 1 on fail. With `--verdict-posted FILE`, writes the conclusion to FILE only after the verdict check is posted, so the workflow's failure step does not post over it (listing check runs right after the POST can miss the new run).
    - On any error after the PR is identified: print the cause to stderr, post a failing check on the same SHA with no marker (best effort, errors ignored), exit 1. If the check name cannot be read from the policy, use the default `pr-risk-gate`.
    - Auth: `GH_TOKEN` env var (the App installation token), used by `gh`.
 
-Pure functions for tests: `max_rank`, `approvers_from_reviews`, `decide`, `build_check_payload`, `parse_marker`, `shared_commit_failure` (takes the open-PR list). Keep them free of I/O.
+Pure functions for tests: `max_rank`, `approvers_from_reviews`, `head_pushers`, `decide`, `build_check_payload`, `parse_marker`, `shared_commit_failure` (takes the open-PR list). Keep them free of I/O.
 
 ## Workflows
 
@@ -121,15 +121,15 @@ Steps:
 6. Reuse the cached rating: `gate.py rating-cache get --app-id`. If none, run `risk.py` on `base...head` (from `target/`), then `ai_rate.sh` with the Anthropic key only in that step. Diff produced with `git -c core.quotePath=false -C target diff --no-ext-diff --no-textconv --text`. Install Claude Code via npm with `--ignore-scripts`, version 2.1.317, only when this step runs.
 7. Combine into `rating.json` with jq.
 8. `gate.py run` with the App token and the app ID.
-9. `if: failure()` step: post a failing check as the App unless the newest one already fails.
+9. `if: (failure() || cancelled()) && steps.verdict.outputs.posted != 'true'` step: post a failing check as the App unless the App's newest check on the SHA already fails. Step 8 sets `posted` from `--verdict-posted`.
 
 ## Out of scope for v1
 
-Per-repo policy overrides. Re-rating on PR body or base edits. Protected-branch restriction inside the gate (the caller's branch filter does it). A central App for many repos (the App needs to be installed on each target repo). Revoking a compromised App key (manual rotation).
+Per-repo policy overrides. Re-rating on PR body or base edits (a base change to a non-default branch still fails, rule 11). A central App for many repos (the App needs to be installed on each target repo). Revoking a compromised App key (manual rotation).
 
 ## Manual setup (cannot be done by code)
 
-1. Create the GitHub App in the org or account that owns the target repos. Permissions: Checks read & write, Pull requests read, Contents read. No webhook. Install it on the target repos only.
+1. Create the GitHub App in the org or account that owns the target repos. Permissions: Checks read & write, Pull requests read, Contents read, Metadata read (the collaborator permission lookup needs it). No webhook. Install it on the target repos only.
 2. In each target repo, create environment `pr-risk-gate` with deployment branches limited to the default branch. Store the App private key as environment secret `PR_RISK_APP_KEY` and the Anthropic key as environment secret `ANTHROPIC_API_KEY`. Store the App ID as repository variable `PR_RISK_APP_ID`. Delete any repository secrets with these names. Needs a paid GitHub plan for private repos.
-3. Ruleset: require the status check `pr-risk-gate` with its source pinned to the App.
+3. Ruleset: require the status check `pr-risk-gate` with its source pinned to the App. Required approving reviews 0; code owners only on security paths; "Require approval of the most recent reviewable push" off (README Setup step 6).
 4. Put `pr-trigger.yml` and `caller.yml` on the default branch.

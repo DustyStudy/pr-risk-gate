@@ -48,6 +48,16 @@ def commit_logins(commit):
     return {(commit.get(k) or {}).get("login", "").lower() for k in ("author", "committer")} - {""}
 
 
+def head_pushers(activity, head_sha):
+    """Lowercased logins that moved the PR branch to head_sha (repository activity entries), or None if unknown.
+
+    GitHub's own "approval of the most recent reviewable push" excludes the pusher. Commit author and committer
+    are set by the pusher, so the activity log is the only reliable source. An entry without an actor -> unknown.
+    """
+    logins = {((a.get("actor") or {}).get("login") or "").lower() for a in activity if a.get("after") == head_sha}
+    return None if not logins or "" in logins else logins
+
+
 def with_write_access(logins, permission_of):
     """Logins for which permission_of(login) is write or higher. A failed lookup -> not counted."""
     ok = set()
@@ -86,7 +96,7 @@ def _code(text):
     return "`" + " ".join(str(text).replace("`", "'").split())[:300] + "`"
 
 
-def build_check_payload(policy, pr, head_sha, rating, approvers, passed, final, required):
+def build_check_payload(policy, pr, head_sha, rating, approvers, passed, final, required, notes=()):
     reasons = list(rating["deterministic"].get("reasons") or [])
     if rating["ai"].get("reason"):
         reasons.append("AI: " + rating["ai"]["reason"])
@@ -96,6 +106,7 @@ def build_check_payload(policy, pr, head_sha, rating, approvers, passed, final, 
         f"**AI review:** {ai_verdict(rating)}",
         f"**Approvals:** {len(approvers)} of {required} required on `{head_sha}`",
         *([] if passed else ["**Failed:** " + ("; ".join(failures(rating, len(approvers), required)) or "see gate log")]),
+        *[f"**Note:** {_code(n)}" for n in notes],
         "",
         "**Reasons:**",
         *([f"- {_code(r)}" for r in shown] or ["- none"]),
@@ -202,6 +213,7 @@ def cmd_run(args):
         if pr.get("state") != "open" or (pr.get("head") or {}).get("sha") != args.head_sha:
             raise GateFailure("PR moved or closed")
         author = pr["user"]["login"]
+        head_ref = (pr.get("head") or {}).get("ref")
         base = (pr.get("base") or {}).get("ref")
         if base != args.base_ref:  # a pass here must not be reusable for a PR into another base
             raise GateFailure(f"PR targets {base}, not the default branch")
@@ -214,15 +226,38 @@ def cmd_run(args):
         approvers = approvers_from_reviews([r for p in pages for r in p], args.head_sha, author)
         # Whoever authored or committed the head commit never approves it.
         pushers = commit_logins(gh_api([f"repos/{args.repo}/commits/{args.head_sha}"])[0])
+        candidates = {a for a in approvers if a.lower() not in pushers}
+        notes = []
+        if candidates:
+            # Whoever pushed the head commit never approves it either (GitHub's last-push rule, enforced here
+            # so a low-risk PR can still need no human). Unknown pusher -> no approval counts (fail closed).
+            pushed_by = None
+            try:
+                if head_ref:
+                    ref = quote(f"refs/heads/{head_ref}", safe="")
+                    pages = gh_api(["--paginate", f"repos/{args.repo}/activity?ref={ref}&per_page=100"])
+                    pushed_by = head_pushers([a for p in pages for a in p], args.head_sha)
+            except (*GH_ERRORS, LookupError, TypeError, AttributeError) as e:
+                print(f"push activity lookup failed: {_cause(e)}", file=sys.stderr)
+            if pushed_by is None:
+                candidates = set()
+                notes.append("the pusher of the head commit is unknown, so no approval counts")
+            else:
+                candidates = {a for a in candidates if a.lower() not in pushed_by}
         # Needs the App's Metadata read permission. `.permission` is the legacy level:
         # maintain is reported as write and triage as read.
         approvers = with_write_access(
-            {a for a in approvers if a.lower() not in pushers},
+            candidates,
             lambda login: gh_api([f"repos/{args.repo}/collaborators/{quote(login, safe='')}/permission"])[0]["permission"],
         )
         passed, final, required = decide(rating, len(approvers), policy)
-        payload = build_check_payload(policy, args.pr, args.head_sha, rating, approvers, passed, final, required)
+        payload = build_check_payload(policy, args.pr, args.head_sha, rating, approvers, passed, final, required, notes)
         gh_api(["-X", "POST", f"repos/{args.repo}/check-runs", "--input", "-"], body=json.dumps(payload))
+        if args.verdict_posted:
+            # Tells the workflow's failure step that a verdict stands on this SHA, so it must not post over it.
+            # Listing check runs right after the POST is not reliable: the new run can be missing for a moment.
+            with open(args.verdict_posted, "w", encoding="utf-8") as f:
+                f.write(payload["conclusion"] + "\n")
     # Fail closed on any error, known or not: an uncaught one would skip the failure check below
     # and leave an earlier success standing on this SHA. Logged to stderr and posted, never silent.
     except Exception as e:  # noqa: BLE001
@@ -272,6 +307,7 @@ def main(argv=None):
     run.add_argument("--base-ref", required=True)
     run.add_argument("--policy", required=True)
     run.add_argument("--rating", required=True)
+    run.add_argument("--verdict-posted", help="file written once the verdict check is posted")
     run.set_defaults(func=cmd_run)
 
     args = parser.parse_args(argv)
