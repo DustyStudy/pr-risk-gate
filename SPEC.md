@@ -16,7 +16,7 @@ A `pull_request` trigger workflow in the target repo does nothing and has no sec
 4. The diff is untrusted data. The model gets no tools (`--tools ""`), `--bare`, and its output is parsed strictly. Never execute PR code. The gate runs no code from the PR checkout; it only reads git objects.
 5. Never print secret values. Secret scan reports file and line only.
 6. Only same-repository PRs into the default branch are rated. A run whose head repository differs from the base repository, that has no PR attached, or whose PR targets another branch, posts a failing check (App-posted) and stops.
-7. An approval counts only if: the user's LATEST submitted review is APPROVED (PENDING reviews are ignored; COMMENTED and DISMISSED replace an earlier approval), its `commit_id` equals the PR head SHA, the user is not the PR author and not the head commit's author or committer, the user's `user.type` is not Bot, the review's `author_association` is OWNER, MEMBER or COLLABORATOR, and the user's repository permission (`repos/R/collaborators/LOGIN/permission`) is admin, maintain or write. A failed permission lookup means that user does not count.
+7. An approval counts only if: the user's LATEST submitted review is APPROVED (PENDING reviews are ignored; COMMENTED and DISMISSED replace an earlier approval), its `commit_id` equals the PR head SHA, the user is not the PR author, not the head commit's author or committer, and not an actor of a `repos/R/activity` entry on the PR's head branch whose `after` is the head SHA (the pusher; if no such entry is found or the lookup fails, no approval counts), the user's `user.type` is not Bot, the review's `author_association` is OWNER, MEMBER or COLLABORATOR, and the user's repository permission (`repos/R/collaborators/LOGIN/permission`) is admin, maintain or write. A failed permission lookup means that user does not count.
 8. If the gate errors after it has identified the PR, it posts a failing check on the head SHA (best effort) so an earlier success does not stand. The job's `failure() || cancelled()` step does the same when the job fails or is cancelled before a verdict.
 9. Only the App posts the check. The cache trusts only check runs whose `app.id` equals the configured App ID. A commit that is the head of more than one open PR gets a failing check (fail closed), so a success on a shared commit cannot satisfy a second PR.
 10. Secrets: the App private key and the Anthropic key live ONLY in the GitHub environment `pr-risk-gate`, whose deployment branch rule allows only the default branch. Never repository secrets: a branch workflow could read those. The trigger workflow has no secrets and no checkout.
@@ -87,14 +87,14 @@ Subcommands:
    - `RATING.json` = `{"deterministic": <risk.py output>, "ai": <ai_rate.sh output>}`. Unknown risk values or missing keys -> failure.
    - Fetches the PR (`repos/R/pulls/N`): author login, head SHA, state and base ref. If the PR head SHA is not `--head-sha`, or the PR is not open, -> failure ("PR moved or closed"). If the base ref is not `--base-ref` (the default branch) -> failure ("PR targets X, not the default branch").
    - Shared-commit check: lists open PRs whose head is `--head-sha` (`repos/R/commits/SHA/pulls`). More than one -> failure ("commit is the head of N open PRs").
-   - Fetches all reviews (`--paginate`), applies rule 7, and counts distinct approvers.
+   - Fetches all reviews (`--paginate`), applies rule 7, and counts distinct approvers. The pusher lookup (`repos/R/activity?ref=refs/heads/<head ref>`) runs only when a candidate approver remains; an unknown pusher adds a note to the summary.
    - `final = max_rank(deterministic.risk, ai.risk)`, `required = policy.approvals[final]` (low 0, medium 1, high 2). Passes iff `ai.verdict == "PASS"` AND `len(approvers) >= required`. Any other verdict value counts as CHANGES.
    - Posts a completed check run as the App: `name=policy.check_name`, `head_sha`, `conclusion=success|failure`, `output.title`, `output.summary` (final risk, required vs. have, reasons, approver logins; reasons and logins rendered inert and capped), and `output.text` = the marker with rating and `pr`.
    - Exit 0 on pass, 1 on fail.
    - On any error after the PR is identified: print the cause to stderr, post a failing check on the same SHA with no marker (best effort, errors ignored), exit 1. If the check name cannot be read from the policy, use the default `pr-risk-gate`.
    - Auth: `GH_TOKEN` env var (the App installation token), used by `gh`.
 
-Pure functions for tests: `max_rank`, `approvers_from_reviews`, `decide`, `build_check_payload`, `parse_marker`, `shared_commit_failure` (takes the open-PR list). Keep them free of I/O.
+Pure functions for tests: `max_rank`, `approvers_from_reviews`, `head_pushers`, `decide`, `build_check_payload`, `parse_marker`, `shared_commit_failure` (takes the open-PR list). Keep them free of I/O.
 
 ## Workflows
 
