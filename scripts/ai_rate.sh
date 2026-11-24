@@ -21,7 +21,8 @@ diff_file="${DIFF_FILE:-}"
 [ -n "${ANTHROPIC_API_KEY:-}" ] || fallback "AI rating disabled (no key)"
 
 work="$(mktemp -d)" || fallback "AI rating unavailable: no temp dir"
-trap 'rm -rf "$work"' EXIT
+# `|| true`: under `set -e` a failed cleanup would replace the exit status, and this script always exits 0.
+trap 'rm -rf "$work" || true' EXIT
 
 # No tools and --bare, so the model cannot read the runner's files or environment.
 rc=0

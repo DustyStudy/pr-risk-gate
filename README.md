@@ -67,7 +67,7 @@ Live-tested on the test repo `DustyStudy/factory-test-target`, which is public, 
 
 | What | Result |
 |---|---|
-| Unit tests (54) and CI on the gate repo (lint, gitleaks, zizmor) | Pass on every merged gate PR |
+| Unit tests (64) and CI on the gate repo (lint, gitleaks, zizmor) | Pass on every merged gate PR |
 | Trigger, caller, gate and App check, end to end | Pass: PR #36 (low tier) posted `pr-risk-gate` success as the App |
 | Environment secrets reach the reusable gate (App key and Anthropic key), with no repository-level copies | Pass: PR #36 mint and AI rating both succeeded |
 | High tier with AI review CHANGES | Fail as designed: PR #37 (dependency pin), 0 of 2 approvals |
@@ -81,6 +81,7 @@ Live-tested on the test repo `DustyStudy/factory-test-target`, which is public, 
 - A mint failure, which posts nothing (see Known limits).
 - A PR that drops its review trigger, and a retarget that re-runs the gate.
 - Rotating the App key.
+- A low-risk PR merging with 0 approvals under the full ruleset from Setup step 6 (code owners on security paths only, last-push approval off).
 
 ## Setup
 
@@ -91,14 +92,14 @@ Live-tested on the test repo `DustyStudy/factory-test-target`, which is public, 
 4. **Copy the workflows** to the target repo's default branch:
    - `examples/pr-trigger.yml` as `.github/workflows/pr-trigger.yml`.
    - `examples/caller.yml` as `.github/workflows/pr-risk-gate.yml`. Replace the placeholder SHA with the full commit SHA of the gate release you have reviewed.
-5. **Add CODEOWNERS.** Copy `CODEOWNERS.example` to `.github/CODEOWNERS` and fill in the owners.
+5. **Add CODEOWNERS.** Copy `CODEOWNERS.example` to `.github/CODEOWNERS` and fill in the owners. List only security-owned paths. A catch-all `*` owner makes every PR need a code owner's approval, so low-risk PRs could no longer merge without a human.
 6. **Add a branch ruleset** on the default branch:
    - Require status check `pr-risk-gate`, with its source pinned to the App.
    - Require your existing CI checks too. The gate does not replace tests.
    - Require approving reviews: **0**. The gate sets the human count per tier (0, 1 or 2).
    - Require review from Code Owners.
    - Dismiss stale approvals on new pushes.
-   - Require approval of the most recent reviewable push.
+   - Leave "Require approval of the most recent reviewable push" **off**. GitHub documents it as requiring someone other than the last pusher to approve, which would give low-risk PRs a human requirement. The gate already counts only approvals on the head commit and ignores the head commit's author and committer.
    - Block bypass for everyone, including admins.
 
 ## Tests

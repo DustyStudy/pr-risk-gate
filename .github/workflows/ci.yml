@@ -53,7 +53,7 @@ jobs:
             inrun && NF && ind <= key && $0 !~ /^ *(- )?run:/ { inrun = 0 }
             inrun && /[$][{][{].*github[.]event/ { print FILENAME ":" FNR ": " $0; bad = 1 }
             END { exit bad }
-          ' .github/workflows/*.yml
+          ' .github/workflows/*.yml examples/*.yml
 
   test:
     name: Unit tests
@@ -128,7 +128,8 @@ jobs:
           "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/zizmor.txt"
 
       # zizmor exits non-zero on any finding at or above --min-severity, which fails the job.
+      # The examples are the workflows target repos copy, so they are audited too.
       - name: Audit workflows
         env:
           GH_TOKEN: ${{ github.token }}
-        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --format github --min-severity medium .github'
+        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --format github --min-severity medium .github examples/caller.yml examples/pr-trigger.yml'
