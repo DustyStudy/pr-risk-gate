@@ -186,20 +186,29 @@ jobs:
 
       # Decides pass or fail. gate.py validates the rating and re-reads the PR itself.
       # It refuses a PR whose base is not the default branch (the trigger has no branch filter).
+      # A failing verdict exits 1 too; `posted` tells the last step that this verdict must stand.
       - name: Count approvals and post the check
+        id: verdict
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
+          rc=0
           python3 gate/scripts/gate.py run --repo "$REPO" --pr "$PR_NUMBER" --head-sha "$HEAD_SHA" --app-id "$APP_ID" \
-            --base-ref "$DEFAULT_BRANCH" --policy gate/policy/policy.json --rating "$RUNNER_TEMP/rating.json"
+            --base-ref "$DEFAULT_BRANCH" --policy gate/policy/policy.json --rating "$RUNNER_TEMP/rating.json" \
+            --verdict-posted "$RUNNER_TEMP/verdict-posted" || rc=$?
+          if [ -s "$RUNNER_TEMP/verdict-posted" ]; then
+            echo "posted=true" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$rc"
 
       # A job that dies or is cancelled before the verdict must not leave an older success on this
       # commit (SPEC rule 8). Never `always()`: a successful run must not post a failure.
-      # Skipped when the App's newest check already fails (the gate's own verdict), so its rating marker
-      # stays newest. Checks from any other app are ignored, so a fake failure cannot suppress this one.
+      # Skipped when this run posted its verdict (a failing verdict also fails the job), so the verdict and
+      # its rating marker stay newest. Also skipped when the App's newest check already fails. Checks from
+      # any other app are ignored, so a fake failure cannot suppress this one.
       # If the token could not be minted, this step fails too: nothing but the App may post the check.
       - name: Fail the check if the job failed or was cancelled before a verdict
-        if: ${{ failure() || cancelled() }}
+        if: ${{ (failure() || cancelled()) && steps.verdict.outputs.posted != 'true' }}
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
