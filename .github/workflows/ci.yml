@@ -132,3 +132,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --format github --min-severity medium .github'
+
+  trivy:
+    name: Vulnerabilities and misconfiguration (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      TRIVY_VERSION: "0.74.0"
+      TRIVY_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Same pinned, checksum-verified CLI and scan as the org's shared security-scan.yml.
+      - name: Install trivy (checksum-verified)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLo trivy.tgz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  trivy.tgz" | sha256sum --check --strict
+          tar -xzf trivy.tgz trivy
+
+      - name: Run Trivy filesystem scan
+        run: |
+          "$RUNNER_TEMP/trivy" fs . --scanners vuln,misconfig --severity HIGH,CRITICAL \
+            --ignore-unfixed --skip-dirs .git --exit-code 1
