@@ -128,8 +128,12 @@ jobs:
           "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/zizmor.txt"
 
       # zizmor exits non-zero on any finding at or above --min-severity, which fails the job.
-      # The examples are the workflows target repos copy, so they are audited too.
       - name: Audit workflows
         env:
           GH_TOKEN: ${{ github.token }}
-        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --format github --min-severity medium .github examples/caller.yml examples/pr-trigger.yml'
+        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --format github --min-severity medium .github'
+
+      # The examples are the workflows target repos copy. Offline: caller.yml pins an all-zero placeholder SHA
+      # on purpose, which the online impostor-commit audit rejects.
+      - name: Audit example workflows (offline)
+        run: '"$RUNNER_TEMP/zizmor/bin/zizmor" --offline --format github --min-severity medium examples/caller.yml examples/pr-trigger.yml'
