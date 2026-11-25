@@ -55,13 +55,11 @@ def classify(changes, added_lines, policy, deleted=None):
                 floors.append((level, f"{n} {unit} changed (over {limit})"))
                 break
 
-    patterns = [(p["name"], re.compile(p["regex"])) for p in policy["secret_patterns"]]
+    patterns = [re.compile(rule["regex"]) for rule in policy["secret_patterns"]]
     for path, lineno, text in added_lines:
-        for name, rx in patterns:
-            if rx.search(text):
-                # Never include the matched text (SPEC security rule 5).
-                floors.append(("high", f"possible secret in {path}:{lineno} ({name})"))
-                break
+        if any(pattern.search(text) for pattern in patterns):
+            # Keep the report useful without including policy values or matched text.
+            floors.append(("high", f"possible secret in {path}:{lineno}"))
 
     # LEVELS.index raises on an unknown risk value in the policy: fail closed.
     risk = LEVELS[max([LEVELS.index(r) for r, _ in floors], default=0)]
@@ -169,8 +167,8 @@ def main():
         result = classify(changes, added, policy, deleted)
     # Fail closed: any git, policy or parse error fails the gate with one stderr line and exit 1.
     # A policy file of the wrong shape can raise almost anything, so the catch stays broad.
-    except Exception as e:  # noqa: BLE001
-        print(f"risk.py: {e}", file=sys.stderr)
+    except Exception as error:  # noqa: BLE001
+        print(f"risk.py: unable to rate the diff ({type(error).__name__})", file=sys.stderr)
         return 1
     print(json.dumps(result))
     return 0
