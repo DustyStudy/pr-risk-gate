@@ -40,7 +40,7 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 - **The keys are only in the environment.** Repository secrets with the same names must not exist, or a branch workflow could read them. Setup below.
 - **PR code never runs in a trusted job.** The trigger job has no checkout, and the gate checks out the PR only to read git objects.
 - **The AI can only raise risk.** Final risk is the higher of the rule result and the AI result. An AI error, timeout, oversized diff, or unparseable reply counts as high.
-- **Prompt injection is contained, not solved.** The diff is untrusted. The model has no tools and runs with `--bare`, and its reply is parsed strictly. A hostile diff can at most make the model say "low", and the rules still apply.
+- **Prompt injection is contained, not solved.** The diff is untrusted. The model has no tools and runs with `--bare`, and its reply is parsed strictly. A hostile diff can at most make the model say "low" and "PASS", and the rules still apply. On a diff the rules also rate low, that means a merge with no human: the low tier trusts the model and the rules together.
 - **Approvals count only from people with write access.** An approval counts only if it is the reviewer's latest submitted review, is on the current head commit, is not from the PR author, the head commit's author or committer, or whoever pushed the head commit, is not from a bot, and comes from a user whose repository permission is admin, maintain or write.
 - **A reply in a review thread counts as a new review.** GitHub records a comment reply as a COMMENTED review, so a reviewer who approves and then replies "thanks" loses the approval until they approve again. This is stricter than GitHub's own branch protection, on purpose.
 - **Fail closed.** A rule error posts a failing check. A missing API key rates the PR high.
@@ -61,13 +61,24 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 - **Environments need a plan.** Environments with branch rules on private repos require a paid GitHub plan.
 - **Gate repo visibility.** The caller checks this repo out with the default token, so this repo must be public, the same as issue-factory.
 
+## Changes in v1.1.0
+
+- **Submodule pointer changes rate high.** A gitlink bump pulls in code the diff does not show. It used to rate low, and a `.gitmodules` `ignore = all` hid it from both the rules and the AI.
+- **A test replaced by a symlink counts as a removed test** (high).
+- **A rename counts as one changed file** for the size thresholds. Both of its paths still match the path rules.
+- **The gate rates against the PR's current base**, read from the PR with the App token, not the base in the event. Re-running an old run after a retarget can no longer rate a smaller diff.
+- **A gate upgrade re-rates open PRs.** The cached rating is bound to the policy it was made under. Expect one fresh AI rating per open PR after you move the caller's pin.
+
+Upgrade: set the caller's pinned SHA to the v1.1.0 release commit. No setup, permission or secret changes.
+
 ## Test status
 
 Live-tested on the public [integration fixture](https://github.com/DustyStudy/factory-test-target) with the gate at the commits listed. Re-test after any change to the gate, the policy, or the caller.
 
 | What | Result |
 |---|---|
-| Unit tests (68) and CI on the gate repo (lint, gitleaks, zizmor) | Pass on every merged gate PR |
+| Unit tests (73) and CI on the gate repo (lint, gitleaks, zizmor, Trivy) | Pass on the v1.1.0 branch from a fresh clone (Ubuntu 24.04); CI reruns on the release PR |
+| v1.1.0 changes, live | **Not run yet.** The rows below ran on the v1.0.0 release candidate. The new base lookup and the rest need one live low and one medium PR at the v1.1.0 SHA |
 | Trigger, caller, gate and App check, end to end | Pass: [PR #36](https://github.com/DustyStudy/factory-test-target/pull/36) (low tier) posted `pr-risk-gate` success as the App |
 | Environment secrets reach the reusable gate (App key and Anthropic key), with no repository-level copies | Pass: PR #36 mint and AI rating both succeeded |
 | High tier with AI review CHANGES | Fail as designed: [PR #37](https://github.com/DustyStudy/factory-test-target/pull/37) (dependency pin), 0 of 2 approvals |
