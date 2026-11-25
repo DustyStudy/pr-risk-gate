@@ -17,7 +17,7 @@ The rating comes from two sources, and the higher one wins:
 1. **Deterministic rules** (`policy/policy.json`): path rules for CI, infrastructure, auth, crypto, IAM, git plumbing and dependencies; diff size; deleted or shrunk tests; and a scan of added lines for secrets.
 2. **Claude**, with no tools, reading the diff once. It can only raise the rating.
 
-The result is posted as a required status check named `pr-risk-gate`, by a dedicated GitHub App. No PR, workflow or personal token can post it.
+A dedicated GitHub App posts the `pr-risk-gate` check. The branch ruleset requires a result from that App.
 
 ## Design
 
@@ -36,7 +36,7 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 
 ## Security model
 
-- **Only the App can post the check.** The cache trusts only check runs made by the App's ID, so a forged check from a workflow or a personal token does not count.
+- **The App is the trusted source.** The branch ruleset pins the required check to the App, and the cache accepts check runs only from that App ID.
 - **The keys are only in the environment.** Repository secrets with the same names must not exist, or a branch workflow could read them. Setup below.
 - **PR code never runs in a trusted job.** The trigger job has no checkout, and the gate checks out the PR only to read git objects.
 - **The AI can only raise risk.** Final risk is the higher of the rule result and the AI result. An AI error, timeout, oversized diff, or unparseable reply counts as high.
@@ -54,7 +54,7 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 - **A PR can edit its own review trigger.** `pull_request_review` runs the PR's copy of the trigger file, and there is no `pull_request_review_target`. A PR that removes that trigger keeps its earlier check result until its next push. CODEOWNERS on `.github/workflows/` and "Require review from Code Owners" on the ruleset make that edit visible and need security approval before merge.
 - **A failed mint leaves the earlier result standing.** If the App token cannot be minted (App outage, rotated key, wrong App ID), no failing check can be posted, and an older success on the SHA stays. Watch for `pr-risk-gate` runs that fail at the mint step.
 - **The pusher comes from the repository activity log.** The gate excludes whoever moved the PR branch to the head commit (`repos/R/activity`), since commit author and committer are set by the pusher. If no activity entry names the push (lookup error, or the log lags just after a push), no approval counts: medium and high fail until the next review event re-runs the gate, and low is unaffected.
-- **The App key is the root of trust.** Anyone with admin on the target repo can read environment secrets. Rotate the App key in GitHub and in the environment if it leaks.
+- **Repository administrators are trusted.** They can change the environment and its protection rules. Rotate the App key in GitHub and in the environment if it leaks.
 - **Workflows that run in the trusted context stay trusted.** Protect the default branch: changes to the trigger, the caller or the gate must go through reviewed merges.
 - **Rating re-rolls.** A marker-less failure as the newest App check forces a fresh AI rating. The deterministic floor still applies.
 - **Dependabot PRs.** It is not known whether a Dependabot run can read the App key. If it cannot, its check fails at the mint step, which is fail-closed. Verify this on a live run.
@@ -63,17 +63,17 @@ pull_request_target / pull_request_review  ->  pr-trigger workflow (base-branch 
 
 ## Test status
 
-Live-tested on the test repo `DustyStudy/factory-test-target`, which is public, with the gate at the commits listed. Re-test after any change to the gate, the policy, or the caller.
+Live-tested on the public [integration fixture](https://github.com/DustyStudy/factory-test-target) with the gate at the commits listed. Re-test after any change to the gate, the policy, or the caller.
 
 | What | Result |
 |---|---|
 | Unit tests (68) and CI on the gate repo (lint, gitleaks, zizmor) | Pass on every merged gate PR |
-| Trigger, caller, gate and App check, end to end | Pass: PR #36 (low tier) posted `pr-risk-gate` success as the App |
+| Trigger, caller, gate and App check, end to end | Pass: [PR #36](https://github.com/DustyStudy/factory-test-target/pull/36) (low tier) posted `pr-risk-gate` success as the App |
 | Environment secrets reach the reusable gate (App key and Anthropic key), with no repository-level copies | Pass: PR #36 mint and AI rating both succeeded |
-| High tier with AI review CHANGES | Fail as designed: PR #37 (dependency pin), 0 of 2 approvals |
-| Release candidate, low tier (docs only) | Pass: PR #40 posted success, 0 of 0 approvals, at `f0a7f15` and again at `20f232f` |
-| Release candidate, medium tier with AI PASS and 0 approvals | Fail as designed: PR #41, 0 of 1 approvals. The first run found the failure step posting a generic error over the verdict (a listing race). Fixed with `--verdict-posted`; the re-run at the fix kept the verdict newest |
-| Medium tier with AI PASS and 0 approvals (solo mode, since replaced) | Pass: PR #38. Current policy needs 1 human approval for medium, so this result no longer applies |
+| High tier with AI review CHANGES | Fail as designed: [PR #37](https://github.com/DustyStudy/factory-test-target/pull/37) (dependency pin), 0 of 2 approvals |
+| Release candidate, low tier (docs only) | Pass: [PR #40](https://github.com/DustyStudy/factory-test-target/pull/40) posted success, 0 of 0 approvals, at `f0a7f15` and again at `20f232f` |
+| Release candidate, medium tier with AI PASS and 0 approvals | Fail as designed: [PR #41](https://github.com/DustyStudy/factory-test-target/pull/41), 0 of 1 approvals. The first run found the failure step posting a generic error over the verdict (a listing race). Fixed with `--verdict-posted`; the re-run at the fix kept the verdict newest |
+| Medium tier with AI PASS and 0 approvals (solo mode, since replaced) | Pass: [PR #38](https://github.com/DustyStudy/factory-test-target/pull/38). Current policy needs 1 human approval for medium, so this result no longer applies |
 
 **Not tested live:**
 - A PR approved by a second person: medium passing with 1 approval, and high passing with 2. Needs a second collaborator.
