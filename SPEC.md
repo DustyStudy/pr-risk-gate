@@ -48,8 +48,9 @@ Unchanged from v1 except as noted in code: `check_name`, `approvals`, `size`, `p
 Rules:
 - `risk` values are `low`, `medium`, `high`. Each `reason` is shown in the check output.
 - A file that matches a path rule sets that risk as a floor. The highest matched floor wins. A file can match several rules; each rule's reason is listed.
-- Size: `lines` = added + deleted. `files` = changed files. Over `medium_*` -> medium, over `high_*` -> high. "Over" means strictly greater.
-- A deleted test-path file -> `deleted_test_risk`. A modified or renamed test-path file whose deleted lines exceed its added lines -> `deleted_test_risk`, reason `test file shrunk: <path>`.
+- Size: `lines` = added + deleted. `files` = changed files (a rename counts once; both its paths still match path rules). Over `medium_*` -> medium, over `high_*` -> high. "Over" means strictly greater.
+- A deleted test-path file, a test-path file renamed to a non-test path, or a test-path file whose type changed (to a symlink or submodule) -> `deleted_test_risk`. A modified or renamed test-path file whose deleted lines exceed its added lines -> `deleted_test_risk`, reason `test file shrunk: <path>`.
+- A changed submodule pointer (old or new mode 160000) -> high, reason `submodule pointer changed: <path>`: the new commit's code is not in the diff.
 - `secret_patterns` apply to ADDED lines only. Any hit -> high, reason "possible secret in <file>:<line>".
 - Glob semantics: `**` matches zero or more path segments. `**/x` matches `x` at any depth, including the root. `dir/**` matches everything under `dir/` but not `dir` itself. `*` stays within one path segment. Paths use `/`, relative to the repo root. Path rules are case-insensitive.
 
@@ -58,7 +59,7 @@ Rules:
 ### scripts/risk.py (deterministic)
 
 CLI: `python3 scripts/risk.py --policy POLICY.json --base BASE_SHA --head HEAD_SHA`
-- Runs `git -c core.quotePath=false diff --name-status -z -M` and `git diff --no-ext-diff --no-textconv --text -U0` over `base...head`, in the current directory.
+- Runs `git -c core.quotePath=false diff --raw -z -M` and `git diff -U0`, both with `--no-ext-diff --no-textconv --text --ignore-submodules=none`, over `base...head`, in the current directory.
 - Quoted patch-header paths are decoded with `unquote_git` before matching.
 - Prints one JSON line: `{"risk": "low|medium|high", "reasons": ["..."], "files": N, "lines": N}`. Exit 0 on success; exit 1 on any git or parse error; exit 2 on bad CLI arguments.
 - Pure functions: `match_glob`, `classify(changes, added_lines, policy, deleted=None)`, `parse_patch`, `parse_name_status`, `unquote_git`.
@@ -80,8 +81,8 @@ Subcommands:
 
 1. `python3 scripts/gate.py rating-cache get --repo OWNER/REPO --pr N --sha SHA --app-id ID`
    - Lists check runs on SHA named `policy.check_name` whose `app.id` equals `--app-id`. Newest (highest id) wins.
-   - Reads the marker `<!-- pr-risk-gate-rating: {...} -->` from that run's `output.text`. The marker holds the rating plus `"pr": N`.
-   - Prints the rating JSON (`{"deterministic","ai"}`, without `pr`) only if the marker's `pr` equals `--pr`. Otherwise prints nothing. Exit 0 except on argument errors.
+   - Reads the marker `<!-- pr-risk-gate-rating: {...} -->` from that run's `output.text`. The marker holds the rating plus `"pr": N` and `"policy"` (`policy_id`: a short sha256 of the policy JSON with sorted keys plus `rater_digest`, the sha256 of `risk.py`, `ai_rate.sh`, `json_field.py` and `prompts/risk.md`).
+   - Prints the rating JSON (`{"deterministic","ai"}`, without `pr` and `policy`) only if the marker's `pr` equals `--pr` and its `policy` equals the current policy's `policy_id`, so a gate upgrade re-rates open PRs. Otherwise prints nothing. Exit 0 except on argument errors.
 
 2. `python3 scripts/gate.py run --repo OWNER/REPO --pr N --head-sha SHA --app-id ID --base-ref BRANCH --policy POLICY.json --rating RATING.json`
    - `RATING.json` = `{"deterministic": <risk.py output>, "ai": <ai_rate.sh output>}`. Unknown risk values or missing keys -> failure.
@@ -89,12 +90,12 @@ Subcommands:
    - Shared-commit check: lists open PRs whose head is `--head-sha` (`repos/R/commits/SHA/pulls`). More than one -> failure ("commit is the head of N open PRs").
    - Fetches all reviews (`--paginate`), applies rule 7, and counts distinct approvers. The pusher lookup (`repos/R/activity?ref=refs/heads/<head ref>`) runs only when a candidate approver remains; an unknown pusher adds a note to the summary.
    - `final = max_rank(deterministic.risk, ai.risk)`, `required = policy.approvals[final]` (low 0, medium 1, high 2). Passes iff `ai.verdict == "PASS"` AND `len(approvers) >= required`. Any other verdict value counts as CHANGES.
-   - Posts a completed check run as the App: `name=policy.check_name`, `head_sha`, `conclusion=success|failure`, `output.title`, `output.summary` (final risk, required vs. have, reasons, approver logins; reasons and logins rendered inert and capped), and `output.text` = the marker with rating and `pr`.
+   - Posts a completed check run as the App: `name=policy.check_name`, `head_sha`, `conclusion=success|failure`, `output.title`, `output.summary` (final risk, required vs. have, reasons, approver logins; reasons and logins rendered inert and capped), and `output.text` = the marker with rating, `pr` and `policy`.
    - Exit 0 on pass, 1 on fail. With `--verdict-posted FILE`, writes the conclusion to FILE only after the verdict check is posted, so the workflow's failure step does not post over it (listing check runs right after the POST can miss the new run).
    - On any error after the PR is identified: print the cause to stderr, post a failing check on the same SHA with no marker (best effort, errors ignored), exit 1. If the check name cannot be read from the policy, use the default `pr-risk-gate`.
    - Auth: `GH_TOKEN` env var (the App installation token), used by `gh`.
 
-Pure functions for tests: `max_rank`, `approvers_from_reviews`, `head_pushers`, `decide`, `build_check_payload`, `parse_marker`, `shared_commit_failure` (takes the open-PR list). Keep them free of I/O.
+Pure functions for tests: `max_rank`, `approvers_from_reviews`, `head_pushers`, `decide`, `build_check_payload`, `policy_id`, `parse_marker`, `shared_commit_failure` (takes the open-PR list). Keep them free of I/O.
 
 ## Workflows
 
@@ -115,10 +116,10 @@ Guard: stop with a failing check if `workflow_run.head_repository.full_name` dif
 Steps:
 1. Harden runner (issue-factory's pin).
 2. Checkout this repo at `${{ job.workflow_sha }}` into `gate/`, persist-credentials false. Fail if the SHA is empty.
-3. Checkout the target at `${{ github.event.workflow_run.head_sha }}` with fetch-depth 0 into `target/`, persist-credentials false. Never run target code.
+3. (after step 5) Checkout the target at `${{ github.event.workflow_run.head_sha }}` with fetch-depth 0 into `target/`, persist-credentials false. Never run target code.
 4. Mint the App token with `actions/create-github-app-token` (pinned SHA from issue-factory or a verified release) using `app_id` and `PR_RISK_APP_KEY`, scoped to this repository, permissions `checks: write`, `pull-requests: read`, `contents: read`.
-5. Read PR number and base SHA from `workflow_run.pull_requests[0]`.
-6. Reuse the cached rating: `gate.py rating-cache get --app-id`. If none, run `risk.py` on `base...head` (from `target/`), then `ai_rate.sh` with the Anthropic key only in that step. Diff produced with `git -c core.quotePath=false -C target diff --no-ext-diff --no-textconv --text`. Install Claude Code via npm with `--ignore-scripts`, version 2.1.317, only when this step runs.
+5. Read the PR number from `workflow_run.pull_requests[0]`. Read the base SHA from the PR itself (`repos/R/pulls/N`, App token), not from the event, which a re-run replays after a retarget: fail unless the PR is open, its head is `workflow_run.head_sha` and its base ref is the default branch.
+6. Reuse the cached rating: `gate.py rating-cache get --app-id`. If none, run `risk.py` on `base...head` (from `target/`), then `ai_rate.sh` with the Anthropic key only in that step. Diff produced with `git -c core.quotePath=false -C target diff --no-ext-diff --no-textconv --text --ignore-submodules=none`. Install Claude Code via npm with `--ignore-scripts`, version 2.1.317, only when this step runs.
 7. Combine into `rating.json` with jq.
 8. `gate.py run` with the App token and the app ID.
 9. `if: (failure() || cancelled()) && steps.verdict.outputs.posted != 'true'` step: post a failing check as the App unless the App's newest check on the SHA already fails. Step 8 sets `posted` from `--verdict-posted`.

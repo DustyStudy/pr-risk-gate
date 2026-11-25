@@ -39,14 +39,19 @@ def classify(changes, added_lines, policy, deleted=None):
             more = f" (+{len(hits) - 1} more)" if len(hits) > 1 else ""
             floors.append((rule["risk"], f"{rule['reason']}: {hits[0]}{more}"))
 
-    for path in (p for s, p in changes if s == "D" and is_test_path(p)):
+    # A submodule pointer bump pulls in code the diff does not show: a supply-chain change.
+    for path in (p for s, p in changes if s == "G"):
+        floors.append(("high", f"submodule pointer changed: {path}"))
+    # "d": a test renamed to a non-test path. "T": a test replaced by a symlink or submodule. Neither runs any more.
+    for path in (p for s, p in changes if s in ("D", "d", "T") and is_test_path(p)):
         floors.append((policy["deleted_test_risk"], f"deleted test file: {path}"))
     # A test gutted in place (or while renamed) is as good as deleted.
     for path in dict.fromkeys(p for s, p in changes if s in ("M", "R") and is_test_path(p)):
         if deleted.get(path, 0) > sum(1 for a in added_lines if a[0] == path):
             floors.append((policy["deleted_test_risk"], f"test file shrunk: {path}"))
 
-    files = len(set(paths))
+    # A rename is one changed file: its source ("r"/"d") counts for path rules, not for size.
+    files = len({p for s, p in changes if s not in ("r", "d", "G")})
     lines = len(added_lines) + sum(deleted.values())
     for n, unit in ((lines, "lines"), (files, "files")):
         for level in ("high", "medium"):
@@ -67,26 +72,34 @@ def classify(changes, added_lines, policy, deleted=None):
 
 
 def parse_name_status(out):
-    """Parse `git diff --name-status -M -z` output into [(status, path)]."""
+    """Parse `git diff --raw -M -z` (or `--name-status -M -z`) output into [(status, path)].
+
+    A rename's source path is ("r", old), or ("d", old) when a test path leaves the test globs.
+    A raw record whose old or new mode is 160000 (a submodule commit pointer) adds ("G", path) after its change.
+    """
     tok = out.split("\0")
     if tok and tok[-1] == "":
         tok.pop()
     changes, i = [], 0
     while i < len(tok):
-        status = tok[i][:1]
+        meta = tok[i].split()
+        gitlink = tok[i].startswith(":") and "160000" in (m.lstrip(":") for m in meta[:2])
+        status = meta[-1][:1] if meta else ""
         if status in ("R", "C"):
             old, new = tok[i + 1], tok[i + 2]
             i += 3
             if status == "R":
                 # A test renamed to a non-test path no longer runs: treat as deleted.
                 gone = is_test_path(old) and not is_test_path(new)
-                changes.append(("D" if gone else "R", old))
+                changes.append(("d" if gone else "r", old))
             changes.append((status, new))
         elif status in ("A", "D", "M", "T"):
             changes.append((status, tok[i + 1]))
             i += 2
         else:
             raise ValueError(f"unexpected name-status record {tok[i]!r}")
+        if gitlink:
+            changes.append(("G", changes[-1][1]))
     return changes
 
 
@@ -143,7 +156,9 @@ def parse_patch(out):
 
 def git_diff(*args):
     # --text: a PR-supplied .gitattributes `-diff` must not hide lines from the scan.
-    cmd = ["git", "-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-textconv", "--text", *args, "--"]
+    # --ignore-submodules=none: a PR-supplied .gitmodules `ignore = all` must not hide a submodule pointer change.
+    cmd = ["git", "-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-textconv", "--text",
+           "--ignore-submodules=none", *args, "--"]
     r = subprocess.run(cmd, capture_output=True, check=False)
     if r.returncode != 0:
         raise RuntimeError(f"git diff failed: {r.stderr.decode('utf-8', 'replace').strip()}")
@@ -162,7 +177,7 @@ def main():
         with open(a.policy, encoding="utf-8") as f:
             policy = json.load(f)
         rng = f"{a.base}...{a.head}"
-        changes = parse_name_status(git_diff("--name-status", "-M", "-z", rng))
+        changes = parse_name_status(git_diff("--raw", "-M", "-z", rng))
         added, deleted = parse_patch(git_diff("-U0", rng))
         result = classify(changes, added, policy, deleted)
     # Fail closed: any git, policy or parse error fails the gate with one stderr line and exit 1.
