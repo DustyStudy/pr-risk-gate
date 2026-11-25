@@ -81,8 +81,8 @@ Subcommands:
 
 1. `python3 scripts/gate.py rating-cache get --repo OWNER/REPO --pr N --sha SHA --app-id ID`
    - Lists check runs on SHA named `policy.check_name` whose `app.id` equals `--app-id`. Newest (highest id) wins.
-   - Reads the marker `<!-- pr-risk-gate-rating: {...} -->` from that run's `output.text`. The marker holds the rating plus `"pr": N`.
-   - Prints the rating JSON (`{"deterministic","ai"}`, without `pr`) only if the marker's `pr` equals `--pr`. Otherwise prints nothing. Exit 0 except on argument errors.
+   - Reads the marker `<!-- pr-risk-gate-rating: {...} -->` from that run's `output.text`. The marker holds the rating plus `"pr": N` and `"policy"` (`policy_id`: a short sha256 of the policy JSON with sorted keys).
+   - Prints the rating JSON (`{"deterministic","ai"}`, without `pr` and `policy`) only if the marker's `pr` equals `--pr` and its `policy` equals the current policy's `policy_id`, so a gate upgrade re-rates open PRs. Otherwise prints nothing. Exit 0 except on argument errors.
 
 2. `python3 scripts/gate.py run --repo OWNER/REPO --pr N --head-sha SHA --app-id ID --base-ref BRANCH --policy POLICY.json --rating RATING.json`
    - `RATING.json` = `{"deterministic": <risk.py output>, "ai": <ai_rate.sh output>}`. Unknown risk values or missing keys -> failure.
@@ -90,12 +90,12 @@ Subcommands:
    - Shared-commit check: lists open PRs whose head is `--head-sha` (`repos/R/commits/SHA/pulls`). More than one -> failure ("commit is the head of N open PRs").
    - Fetches all reviews (`--paginate`), applies rule 7, and counts distinct approvers. The pusher lookup (`repos/R/activity?ref=refs/heads/<head ref>`) runs only when a candidate approver remains; an unknown pusher adds a note to the summary.
    - `final = max_rank(deterministic.risk, ai.risk)`, `required = policy.approvals[final]` (low 0, medium 1, high 2). Passes iff `ai.verdict == "PASS"` AND `len(approvers) >= required`. Any other verdict value counts as CHANGES.
-   - Posts a completed check run as the App: `name=policy.check_name`, `head_sha`, `conclusion=success|failure`, `output.title`, `output.summary` (final risk, required vs. have, reasons, approver logins; reasons and logins rendered inert and capped), and `output.text` = the marker with rating and `pr`.
+   - Posts a completed check run as the App: `name=policy.check_name`, `head_sha`, `conclusion=success|failure`, `output.title`, `output.summary` (final risk, required vs. have, reasons, approver logins; reasons and logins rendered inert and capped), and `output.text` = the marker with rating, `pr` and `policy`.
    - Exit 0 on pass, 1 on fail. With `--verdict-posted FILE`, writes the conclusion to FILE only after the verdict check is posted, so the workflow's failure step does not post over it (listing check runs right after the POST can miss the new run).
    - On any error after the PR is identified: print the cause to stderr, post a failing check on the same SHA with no marker (best effort, errors ignored), exit 1. If the check name cannot be read from the policy, use the default `pr-risk-gate`.
    - Auth: `GH_TOKEN` env var (the App installation token), used by `gh`.
 
-Pure functions for tests: `max_rank`, `approvers_from_reviews`, `head_pushers`, `decide`, `build_check_payload`, `parse_marker`, `shared_commit_failure` (takes the open-PR list). Keep them free of I/O.
+Pure functions for tests: `max_rank`, `approvers_from_reviews`, `head_pushers`, `decide`, `build_check_payload`, `policy_id`, `parse_marker`, `shared_commit_failure` (takes the open-PR list). Keep them free of I/O.
 
 ## Workflows
 

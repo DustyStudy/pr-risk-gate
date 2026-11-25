@@ -173,7 +173,7 @@ class PayloadTests(unittest.TestCase):
         ok = gate.build_check_payload(POLICY, 7, HEAD, r, {"b", "c"}, True, "high", 2)["output"]["summary"]
         self.assertNotIn("**Failed:**", ok)
         self.assertEqual(p["output"]["text"].count("-->"), 1)  # rating text cannot close the comment
-        self.assertEqual(gate.parse_marker(p["output"]["text"]), {**r, "pr": 7})
+        self.assertEqual(gate.parse_marker(p["output"]["text"]), {**r, "pr": 7, "policy": gate.policy_id(POLICY)})
         self.assertEqual(gate.build_check_payload(POLICY, 7, HEAD, r, {"b", "c"}, True, "high", 2)["conclusion"], "success")
 
     def test_parse_marker_rejects_bad_input(self):
@@ -267,7 +267,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual((code, body["conclusion"]), (want, "failure" if want else "success"))
                 self.assertIn(text, body["output"]["summary"])
                 # The marker keeps the rating as given; one without a verdict is not reusable from the cache.
-                self.assertEqual(gate.parse_marker(body["output"]["text"]), None if verdict is None else {**r, "pr": 7})
+                self.assertEqual(gate.parse_marker(body["output"]["text"]), None if verdict is None else {**r, "pr": 7, "policy": gate.policy_id(POLICY)})
 
     def test_run_passes_across_pages_and_posts_check(self):
         pages = json.dumps([review("bob", "APPROVED")]) + json.dumps([review("carol", "APPROVED")])
@@ -460,6 +460,11 @@ class CliTests(unittest.TestCase):
         # Same SHA, different PR: the cached rating is not reused.
         other = [a if a != "7" else "8" for a in argv]
         self.assertEqual(self.run_main(other, [json.dumps(runs)])[:2], (0, ""))
+        # Rated under another policy (the gate was upgraded): a miss, so the PR is re-rated under the new one.
+        stricter = gate.build_check_payload({**POLICY, "deleted_test_risk": "medium"}, 7, HEAD, rating("high"),
+                                            set(), False, "high", 2)["output"]["text"]
+        stale = {"check_runs": [{**runs["check_runs"][1], "output": {"text": stricter}}]}
+        self.assertEqual(self.run_main(argv, [json.dumps(stale)])[:2], (0, ""))
         # Marker without a pr field (older run) is a miss.
         runs["check_runs"][1]["output"]["text"] = f"<!-- pr-risk-gate-rating: {json.dumps(rating('high'))} -->"
         self.assertEqual(self.run_main(argv, [json.dumps(runs)])[:2], (0, ""))

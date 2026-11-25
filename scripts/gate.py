@@ -1,5 +1,6 @@
 """pr-risk-gate: count approvals, read the rating cache, post the required check run. See SPEC.md."""
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -96,6 +97,11 @@ def _code(text):
     return "`" + " ".join(str(text).replace("`", "'").split())[:300] + "`"
 
 
+def policy_id(policy):
+    """Short fingerprint of the policy, so a rating cached under another policy is not reused."""
+    return hashlib.sha256(json.dumps(policy, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def build_check_payload(policy, pr, head_sha, rating, approvers, passed, final, required, notes=()):
     reasons = list(rating["deterministic"].get("reasons") or [])
     if rating["ai"].get("reason"):
@@ -116,7 +122,8 @@ def build_check_payload(policy, pr, head_sha, rating, approvers, passed, final, 
     ]
     # Escape < and > so rating text cannot close the HTML comment; still valid JSON.
     # "pr" binds the cached rating to one PR: the same SHA can be the head of several PRs.
-    compact = json.dumps({**rating, "pr": pr}, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e")
+    # "policy" binds it to the policy it was rated under: a gate upgrade re-rates open PRs.
+    compact = json.dumps({**rating, "pr": pr, "policy": policy_id(policy)}, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e")
     marker = f"<!-- pr-risk-gate-rating: {compact} -->"
     return {
         "name": policy["check_name"],
@@ -188,13 +195,14 @@ def load_json(path):
 
 def cmd_cache_get(args):
     try:
-        name = load_json(args.policy)["check_name"]
+        policy = load_json(args.policy)
+        name = policy["check_name"]
         pages = gh_api(["--paginate", f"repos/{args.repo}/commits/{args.sha}/check-runs?check_name={quote(name, safe='')}&per_page=100"])
         # SPEC rule 9: only the App's own check runs are trusted; a run without app never matches.
         runs = [r for p in pages for r in p["check_runs"]
                 if r["name"] == name and (r.get("app") or {}).get("id") == args.app_id]
         rating = parse_marker(max(runs, key=lambda r: r["id"])["output"]["text"]) if runs else None
-        if rating and rating.pop("pr", None) == args.pr:
+        if rating and rating.pop("pr", None) == args.pr and rating.pop("policy", None) == policy_id(policy):
             print(json.dumps(rating, separators=(",", ":")))
     # Cache miss by contract: nothing on stdout, exit 0, caller re-rates.
     # Covers an unreadable policy, a gh error and a response of an unexpected shape.
