@@ -81,7 +81,7 @@ Subcommands:
 
 1. `python3 scripts/gate.py rating-cache get --repo OWNER/REPO --pr N --sha SHA --app-id ID`
    - Lists check runs on SHA named `policy.check_name` whose `app.id` equals `--app-id`. Newest (highest id) wins.
-   - Reads the marker `<!-- pr-risk-gate-rating: {...} -->` from that run's `output.text`. The marker holds the rating plus `"pr": N` and `"policy"` (`policy_id`: a short sha256 of the policy JSON with sorted keys).
+   - Reads the marker `<!-- pr-risk-gate-rating: {...} -->` from that run's `output.text`. The marker holds the rating plus `"pr": N` and `"policy"` (`policy_id`: a short sha256 of the policy JSON with sorted keys plus `rater_digest`, the sha256 of `risk.py`, `ai_rate.sh`, `json_field.py` and `prompts/risk.md`).
    - Prints the rating JSON (`{"deterministic","ai"}`, without `pr` and `policy`) only if the marker's `pr` equals `--pr` and its `policy` equals the current policy's `policy_id`, so a gate upgrade re-rates open PRs. Otherwise prints nothing. Exit 0 except on argument errors.
 
 2. `python3 scripts/gate.py run --repo OWNER/REPO --pr N --head-sha SHA --app-id ID --base-ref BRANCH --policy POLICY.json --rating RATING.json`
@@ -116,7 +116,7 @@ Guard: stop with a failing check if `workflow_run.head_repository.full_name` dif
 Steps:
 1. Harden runner (issue-factory's pin).
 2. Checkout this repo at `${{ job.workflow_sha }}` into `gate/`, persist-credentials false. Fail if the SHA is empty.
-3. Checkout the target at `${{ github.event.workflow_run.head_sha }}` with fetch-depth 0 into `target/`, persist-credentials false. Never run target code.
+3. (after step 5) Checkout the target at `${{ github.event.workflow_run.head_sha }}` with fetch-depth 0 into `target/`, persist-credentials false. Never run target code.
 4. Mint the App token with `actions/create-github-app-token` (pinned SHA from issue-factory or a verified release) using `app_id` and `PR_RISK_APP_KEY`, scoped to this repository, permissions `checks: write`, `pull-requests: read`, `contents: read`.
 5. Read the PR number from `workflow_run.pull_requests[0]`. Read the base SHA from the PR itself (`repos/R/pulls/N`, App token), not from the event, which a re-run replays after a retarget: fail unless the PR is open, its head is `workflow_run.head_sha` and its base ref is the default branch.
 6. Reuse the cached rating: `gate.py rating-cache get --app-id`. If none, run `risk.py` on `base...head` (from `target/`), then `ai_rate.sh` with the Anthropic key only in that step. Diff produced with `git -c core.quotePath=false -C target diff --no-ext-diff --no-textconv --text --ignore-submodules=none`. Install Claude Code via npm with `--ignore-scripts`, version 2.1.317, only when this step runs.

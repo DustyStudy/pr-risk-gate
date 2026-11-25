@@ -98,14 +98,6 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout target at the PR head (data only, never executed)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 0
-          path: target
-          persist-credentials: false
-
       # The App key (environment secret) goes to this action only. The token is limited to this
       # repository and to the three permissions the gate uses. Runs after an earlier failure or a
       # cancel too, so the last step can still post the failing check as the App.
@@ -147,6 +139,15 @@ jobs:
             exit 1
           fi
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+
+      # After the base lookup, so the full fetch already holds the base commit it returned.
+      - name: Checkout target at the PR head (data only, never executed)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          path: target
+          persist-credentials: false
 
       # A review does not change the diff, so reuse the rating stored on the head commit's check run.
       # gate.py trusts only check runs posted by this App. Any failure or empty result means a fresh rating.

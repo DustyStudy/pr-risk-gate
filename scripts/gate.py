@@ -10,7 +10,9 @@ from urllib.parse import quote
 
 RANKS = ("low", "medium", "high")
 MARKER_RE = re.compile(r"<!-- pr-risk-gate-rating: (.*?) -->")
-DEFAULT_POLICY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "policy", "policy.json")
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_POLICY = os.path.join(HERE, "..", "policy", "policy.json")
+RATER_FILES = ("risk.py", "ai_rate.sh", "json_field.py", os.path.join("..", "prompts", "risk.md"))
 TEXT_LIMIT = 65535  # GitHub cap on check run output.summary and output.text
 HUMAN_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 DEFAULT_CHECK_NAME = "pr-risk-gate"  # used when the policy file cannot be read; matches policy.check_name
@@ -97,9 +99,19 @@ def _code(text):
     return "`" + " ".join(str(text).replace("`", "'").split())[:300] + "`"
 
 
-def policy_id(policy):
-    """Short fingerprint of the policy, so a rating cached under another policy is not reused."""
-    return hashlib.sha256(json.dumps(policy, sort_keys=True).encode()).hexdigest()[:16]
+def rater_digest():
+    """sha256 of the code and prompt that produce a rating. A missing file raises OSError (cache miss or gate error)."""
+    h = hashlib.sha256()
+    for f in RATER_FILES:
+        with open(os.path.join(HERE, f), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()
+
+
+def policy_id(policy, rater=None):
+    """Short fingerprint of the policy and the rating code, so a rating made by another gate version is not reused."""
+    blob = json.dumps(policy, sort_keys=True) + (rater if rater is not None else rater_digest())
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 def build_check_payload(policy, pr, head_sha, rating, approvers, passed, final, required, notes=()):

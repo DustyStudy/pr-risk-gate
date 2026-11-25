@@ -157,6 +157,14 @@ class SharedCommitTests(unittest.TestCase):
 
 
 class PayloadTests(unittest.TestCase):
+    def test_policy_id_covers_policy_and_rating_code(self):
+        self.assertEqual(gate.policy_id(POLICY, "a"), gate.policy_id(dict(reversed(POLICY.items())), "a"))
+        self.assertNotEqual(gate.policy_id(POLICY, "a"), gate.policy_id(POLICY, "b"))  # risk.py or prompt changed
+        self.assertNotEqual(gate.policy_id(POLICY, "a"), gate.policy_id({**POLICY, "deleted_test_risk": "medium"}, "a"))
+        self.assertEqual(gate.policy_id(POLICY), gate.policy_id(POLICY, gate.rater_digest()))
+        with mock.patch.object(gate, "RATER_FILES", ("missing.py",)), self.assertRaises(OSError):
+            gate.rater_digest()
+
     def test_payload_and_marker_round_trip(self):
         r = rating("high", "medium")
         p = gate.build_check_payload(POLICY, 7, HEAD, r, {"bob"}, False, "high", 2)
