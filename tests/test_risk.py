@@ -252,14 +252,14 @@ class ParseTest(unittest.TestCase):
     def test_name_status(self):
         out = "M\0a.py\0R100\0old.py\0new.py\0C75\0x.tf\0y.tf\0D\0gone.py\0"
         self.assertEqual(risk.parse_name_status(out), [
-            ("M", "a.py"), ("R", "old.py"), ("R", "new.py"), ("C", "y.tf"), ("D", "gone.py")])
+            ("M", "a.py"), ("r", "old.py"), ("R", "new.py"), ("C", "y.tf"), ("D", "gone.py")])
         self.assertEqual(risk.parse_name_status(""), [])
 
     def test_test_renamed_out_of_tests_is_a_deletion(self):
         self.assertEqual(risk.parse_name_status("R100\0tests/test_a.py\0attic/a.txt\0"),
-                         [("D", "tests/test_a.py"), ("R", "attic/a.txt")])
+                         [("d", "tests/test_a.py"), ("R", "attic/a.txt")])
         self.assertEqual(risk.parse_name_status("R090\0tests/test_a.py\0tests/test_b.py\0"),
-                         [("R", "tests/test_a.py"), ("R", "tests/test_b.py")])
+                         [("r", "tests/test_a.py"), ("R", "tests/test_b.py")])
 
     def test_raw_records_and_submodule_pointers(self):
         out = (":100644 100644 aaa bbb M\0a.py\0"
@@ -268,10 +268,23 @@ class ParseTest(unittest.TestCase):
                ":100644 100644 fff fff R100\0old.py\0new.py\0")
         self.assertEqual(risk.parse_name_status(out), [
             ("M", "a.py"), ("M", "vendor/lib"), ("G", "vendor/lib"), ("A", "new/sub"), ("G", "new/sub"),
-            ("R", "old.py"), ("R", "new.py")])
+            ("r", "old.py"), ("R", "new.py")])
         r = classify(risk.parse_name_status(out), [])
-        self.assertEqual((r["risk"], r["files"]), ("high", 5))
+        self.assertEqual((r["risk"], r["files"]), ("high", 4))
         self.assertEqual(r["reasons"], ["submodule pointer changed: vendor/lib", "submodule pointer changed: new/sub"])
+
+    def test_rename_counts_as_one_file_and_keeps_both_paths_for_rules(self):
+        out = "".join(f"R100\0docs/a{i}.md\0docs/b{i}.md\0" for i in range(6))
+        r = classify(risk.parse_name_status(out), [])
+        self.assertEqual((r["risk"], r["files"]), ("low", 6))
+        r = classify(risk.parse_name_status("R100\0.github/workflows/ci.yml\0docs/ci.yml\0"), [])
+        self.assertEqual((r["risk"], r["files"]), ("high", 1))
+        r = classify(risk.parse_name_status("R100\0tests/test_a.py\0attic/a.txt\0"), [])
+        self.assertEqual((r["risk"], r["reasons"]), ("high", ["deleted test file: tests/test_a.py"]))
+
+    def test_test_replaced_by_symlink_is_a_deletion(self):
+        r = classify(risk.parse_name_status(":100644 120000 aaa bbb T\0tests/test_a.py\0"), [], {"tests/test_a.py": 40})
+        self.assertEqual((r["risk"], r["reasons"]), ("high", ["deleted test file: tests/test_a.py"]))
 
     def test_name_status_errors(self):
         for bad in ("X\0a.py\0", "M\0", "R100\0only-one\0"):
@@ -426,6 +439,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         r = json.loads(p.stdout)
         self.assertEqual((r["risk"], r["reasons"]), ("high", ["submodule pointer changed: vendor/lib"]))
+
+    def test_ignored_submodule_is_still_seen(self):
+        # A .gitmodules `ignore = all` hides the pointer from a plain `git diff`.
+        self.write(".gitmodules", '[submodule "lib"]\n\tpath = vendor/lib\n\turl = https://example.invalid/x\n\tignore = all\n')
+        # No `add -A` from here: the gitlink has no working-tree directory, so it would be staged as deleted.
+        self.git("add", ".gitmodules")
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{self.base},vendor/lib")
+        self.git("commit", "-q", "--no-verify", "-m", "sub")
+        base = self.git("rev-parse", "HEAD").strip()
+        self.write("README.md", "x\n")
+        self.git("add", "README.md")
+        self.git("update-index", "--cacheinfo", f"160000,{base},vendor/lib")
+        self.git("commit", "-q", "--no-verify", "-m", "bump")
+        r = json.loads(self.run_cli(base, self.git("rev-parse", "HEAD").strip()).stdout)
+        self.assertEqual((r["risk"], r["files"]), ("high", 2))
+        self.assertIn("submodule pointer changed: vendor/lib", r["reasons"])
 
     def test_errors_exit_1(self):
         for base, head in (("0" * 40, self.base), ("--output=x", self.base)):
