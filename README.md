@@ -77,7 +77,7 @@ Live-tested on the public [integration fixture](https://github.com/DustyStudy/fa
 
 | What | Result |
 |---|---|
-| Unit tests (73) and CI on the gate repo (lint, gitleaks, zizmor, Trivy) | Pass on the v1.1.0 branch from a fresh clone (Ubuntu 24.04); CI reruns on the release PR |
+| Unit tests (74) and CI on the gate repo (lint, gitleaks, zizmor, Trivy) | Pass on the v1.1.0 branch from a fresh clone (Ubuntu 24.04); CI reruns on the release PR |
 | v1.1.0 changes, live | **Not run yet.** The rows below ran on the v1.0.0 release candidate. The new base lookup and the rest need one live low and one medium PR at the v1.1.0 SHA |
 | Trigger, caller, gate and App check, end to end | Pass: [PR #36](https://github.com/DustyStudy/factory-test-target/pull/36) (low tier) posted `pr-risk-gate` success as the App |
 | Environment secrets reach the reusable gate (App key and Anthropic key), with no repository-level copies | Pass: PR #36 mint and AI rating both succeeded |

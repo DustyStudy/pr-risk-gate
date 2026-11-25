@@ -16,12 +16,14 @@ Status: PASS, FIXED (was failing, fixed on this branch), OPEN (needs a live run,
 
 | # | Criterion (expected behaviour) | Status | Evidence or blocker |
 |---|---|---|---|
-| 1 | Unit tests pass: `python3 -m unittest discover -s tests` | PASS | 73 OK on a fresh clone at `ce3bc80` (ubuntu:24.04, Python 3.12). Baseline 68 at `337dd59`. |
+| 1 | Unit tests pass: `python3 -m unittest discover -s tests` | PASS | 74 OK on a fresh clone at `2caa813` (ubuntu:24.04, Python 3.12). Baseline 68 at `337dd59`. |
 | 2 | Lint: ruff 0.16.9 (hash-pinned), `py_compile`, shellcheck `--severity=style` | PASS | Fresh clone in ubuntu:24.04 |
 | 3 | Workflow security: zizmor 1.30.1 `--min-severity medium` over `.github` and both examples | PASS (offline) | 0 findings locally (offline); CI runs online on the PR |
 | 4 | Secret scan (gitleaks, full history) and Trivy fs scan | PASS (CI) | Green on `main` at `337dd59`; CI reruns both on the release PR |
 | 5 | A submodule pointer change rates high (supply-chain change the diff does not show) | FIXED | Was `low`: `risk.py` read `--name-status`, which has no modes. Now reads `--raw` and floors any 160000-mode change at high. Regressions `test_raw_records_and_submodule_pointers`, `test_submodule_pointer_bump_is_high` (both fail on the old code). |
 | 6 | A gate upgrade with a different policy re-rates open PRs | FIXED | Was: cached rating keyed on PR and head SHA only, reused until the next push. Marker now carries `policy_id`; mismatch is a miss. Regression in `test_cache_get_newest_run_wins_and_misses_are_silent`. One extra AI call per open PR after an upgrade. |
+| 6a | A gate upgrade that changes only rating code or the prompt also re-rates | FIXED | Codex confirm pass: `policy_id` hashed the policy only. It now also hashes `risk.py`, `ai_rate.sh`, `json_field.py`, `prompts/risk.md`. Test `test_policy_id_covers_policy_and_rating_code`. |
+| 7f | The base commit from the lookup is in the target clone | FIXED (code), OPEN (live) | Codex confirm pass: the target was checked out before the base lookup, so a base that moved in between was missing (false failure, fail-closed). Checkout now runs after the lookup. |
 | 7a | A `.gitmodules` `ignore = all` cannot hide a submodule pointer change | FIXED | Found by Codex, reproduced: the bump vanished from both diffs (`files: 0`, low, empty AI input). All three diffs now pass `--ignore-submodules=none`. Regression `test_ignored_submodule_is_still_seen`. |
 | 7b | A test file replaced by a symlink counts as a removed test | FIXED | Found by Codex: a type change (`T`) skipped the floor. Regression `test_test_replaced_by_symlink_is_a_deletion`. |
 | 7c | A rename counts as one changed file (SPEC size rule) | FIXED | Found by Codex: six doc renames counted as 12 files (medium). Regression `test_rename_counts_as_one_file_and_keeps_both_paths_for_rules`, which also checks a renamed `.github/` path stays high. |
@@ -48,8 +50,9 @@ Unit tests use a fake `claude` (tests/test_ai_rate.py) and a mocked `gh_api` (te
 |---|---|---|---|
 | Baseline | `337dd59` | ubuntu:24.04 container, fresh clone | 68 tests OK, shellcheck ok. Main CI (lint, tests, gitleaks, zizmor, Trivy, CodeQL) green. Windows host: 22 test failures, all bash/jq/symlink tests that need Linux; not a supported environment. |
 | After fixes | `ce3bc80` | ubuntu:24.04 container, fresh clone, `scratchpad/verify.sh` mirroring ci.yml | 73 tests OK; shellcheck ok; ruff 0.16.9 (hash-pinned) clean; py_compile ok; zizmor 1.30.1 offline 0 findings; no event interpolation in `run:` |
+| After Codex confirm pass | `2caa813` | same | 74 tests OK; shellcheck, ruff, py_compile, zizmor (offline), interpolation check all clean |
 
 ## Review
 
-- Fable (the required reviewer tier for CI and security) was rate-limited until Nov 28; the independent review went to Codex (GPT-6 Astra, read-only), which reported five findings: one rejected with live evidence, four fixed (7a-7d).
+- Fable (the required reviewer tier for CI and security) was rate-limited until Nov 28; the independent review went to Codex (GPT-6 Astra, read-only), which reported five findings: one rejected with live evidence, four fixed (7a-7d). Its one confirm pass found two more, both fixed in `2caa813` (rows 6a, 7f); it withdrew the rejected finding.
 
