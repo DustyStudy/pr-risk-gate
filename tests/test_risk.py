@@ -234,9 +234,9 @@ class ClassifyTest(unittest.TestCase):
         r = classify([("M", "src/a.py"), ("M", "conf/app.yml")], added)
         self.assertEqual(r["risk"], "high")
         self.assertEqual(r["reasons"], [
-            "possible secret in src/a.py:7 (AWS access key id)",
-            "possible secret in src/a.py:9 (private key block)",
-            "possible secret in conf/app.yml:2 (generic token assignment)",
+            "possible secret in src/a.py:7",
+            "possible secret in src/a.py:9",
+            "possible secret in conf/app.yml:2",
         ])
         out = json.dumps(r)
         self.assertNotIn(FAKE_KEY, out)
@@ -388,7 +388,7 @@ class CliTest(unittest.TestCase):
             "Git plumbing file: .gitattributes",
             "Infrastructure as code: infra/été.tf",
             "deleted test file: tests/test_app.py",
-            "possible secret in src/app.py:4 (AWS access key id)",
+            "possible secret in src/app.py:4",
         ]))
 
     def test_shrunk_test_end_to_end(self):

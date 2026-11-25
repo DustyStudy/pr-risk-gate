@@ -50,7 +50,7 @@ Rules:
 - A file that matches a path rule sets that risk as a floor. The highest matched floor wins. A file can match several rules; each rule's reason is listed.
 - Size: `lines` = added + deleted. `files` = changed files. Over `medium_*` -> medium, over `high_*` -> high. "Over" means strictly greater.
 - A deleted test-path file -> `deleted_test_risk`. A modified or renamed test-path file whose deleted lines exceed its added lines -> `deleted_test_risk`, reason `test file shrunk: <path>`.
-- `secret_patterns` apply to ADDED lines only. Any hit -> high, reason "possible secret in <file>:<line> (<pattern name>)".
+- `secret_patterns` apply to ADDED lines only. Any hit -> high, reason "possible secret in <file>:<line>".
 - Glob semantics: `**` matches zero or more path segments. `**/x` matches `x` at any depth, including the root. `dir/**` matches everything under `dir/` but not `dir` itself. `*` stays within one path segment. Paths use `/`, relative to the repo root. Path rules are case-insensitive.
 
 ## Interfaces
