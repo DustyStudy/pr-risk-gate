@@ -50,6 +50,7 @@ Rules:
 - A file that matches a path rule sets that risk as a floor. The highest matched floor wins. A file can match several rules; each rule's reason is listed.
 - Size: `lines` = added + deleted. `files` = changed files. Over `medium_*` -> medium, over `high_*` -> high. "Over" means strictly greater.
 - A deleted test-path file -> `deleted_test_risk`. A modified or renamed test-path file whose deleted lines exceed its added lines -> `deleted_test_risk`, reason `test file shrunk: <path>`.
+- A changed submodule pointer (old or new mode 160000) -> high, reason `submodule pointer changed: <path>`: the new commit's code is not in the diff.
 - `secret_patterns` apply to ADDED lines only. Any hit -> high, reason "possible secret in <file>:<line>".
 - Glob semantics: `**` matches zero or more path segments. `**/x` matches `x` at any depth, including the root. `dir/**` matches everything under `dir/` but not `dir` itself. `*` stays within one path segment. Paths use `/`, relative to the repo root. Path rules are case-insensitive.
 
@@ -58,7 +59,7 @@ Rules:
 ### scripts/risk.py (deterministic)
 
 CLI: `python3 scripts/risk.py --policy POLICY.json --base BASE_SHA --head HEAD_SHA`
-- Runs `git -c core.quotePath=false diff --name-status -z -M` and `git diff --no-ext-diff --no-textconv --text -U0` over `base...head`, in the current directory.
+- Runs `git -c core.quotePath=false diff --raw -z -M` and `git diff --no-ext-diff --no-textconv --text -U0` over `base...head`, in the current directory.
 - Quoted patch-header paths are decoded with `unquote_git` before matching.
 - Prints one JSON line: `{"risk": "low|medium|high", "reasons": ["..."], "files": N, "lines": N}`. Exit 0 on success; exit 1 on any git or parse error; exit 2 on bad CLI arguments.
 - Pure functions: `match_glob`, `classify(changes, added_lines, policy, deleted=None)`, `parse_patch`, `parse_name_status`, `unquote_git`.

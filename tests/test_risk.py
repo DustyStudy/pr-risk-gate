@@ -261,6 +261,18 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(risk.parse_name_status("R090\0tests/test_a.py\0tests/test_b.py\0"),
                          [("R", "tests/test_a.py"), ("R", "tests/test_b.py")])
 
+    def test_raw_records_and_submodule_pointers(self):
+        out = (":100644 100644 aaa bbb M\0a.py\0"
+               ":160000 160000 ccc ddd M\0vendor/lib\0"
+               ":000000 160000 000 eee A\0new/sub\0"
+               ":100644 100644 fff fff R100\0old.py\0new.py\0")
+        self.assertEqual(risk.parse_name_status(out), [
+            ("M", "a.py"), ("M", "vendor/lib"), ("G", "vendor/lib"), ("A", "new/sub"), ("G", "new/sub"),
+            ("R", "old.py"), ("R", "new.py")])
+        r = classify(risk.parse_name_status(out), [])
+        self.assertEqual((r["risk"], r["files"]), ("high", 5))
+        self.assertEqual(r["reasons"], ["submodule pointer changed: vendor/lib", "submodule pointer changed: new/sub"])
+
     def test_name_status_errors(self):
         for bad in ("X\0a.py\0", "M\0", "R100\0only-one\0"):
             with self.subTest(bad=bad), self.assertRaises((ValueError, IndexError)):
@@ -404,6 +416,16 @@ class CliTest(unittest.TestCase):
         p = self.run_cli(self.base, self.base)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(json.loads(p.stdout), {"risk": "low", "reasons": [], "files": 0, "lines": 0})
+
+    def test_submodule_pointer_bump_is_high(self):
+        # Any commit id works as a gitlink target; no submodule checkout is needed.
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{self.base},vendor/lib")
+        self.git("commit", "-q", "--no-verify", "-m", "sub")
+        head = self.git("rev-parse", "HEAD").strip()
+        p = self.run_cli(self.base, head)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertEqual((r["risk"], r["reasons"]), ("high", ["submodule pointer changed: vendor/lib"]))
 
     def test_errors_exit_1(self):
         for base, head in (("0" * 40, self.base), ("--output=x", self.base)):
